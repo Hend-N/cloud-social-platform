@@ -1,0 +1,14 @@
+.env
+**/.env
+
+venv/
+**/venv/
+
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.db.broken
+
+__pycache__/
+**/__pycache__/

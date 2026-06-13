@@ -1,0 +1,215 @@
+import os
+from fastapi import FastAPI
+from pydantic import BaseModel, EmailStr, Field
+from passlib.context import CryptContext
+from jose import jwt, JWTError
+from datetime import datetime, timedelta, UTC
+from fastapi import Header, HTTPException, Depends
+from sqlalchemy import create_engine
+from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy import String
+from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy import select
+from dotenv import load_dotenv
+
+app = FastAPI()
+class RegisterRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=8, max_length=72)
+
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=8, max_length=72)
+class Base(DeclarativeBase):
+    pass
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    email: Mapped[str] = mapped_column(
+        String,
+        unique=True
+    )
+
+    password_hash: Mapped[str] = mapped_column(
+        String
+    )
+
+load_dotenv()
+SECRET_KEY = os.getenv("SECRET_KEY")
+if SECRET_KEY is None:
+    raise RuntimeError("SECRET_KEY is missing. Add it to your .env file.")
+ALGORITHM = "HS256"
+
+DATABASE_URL = "sqlite:///users.db"
+engine = create_engine(DATABASE_URL)
+SessionLocal = sessionmaker(bind=engine)
+Base.metadata.create_all(bind=engine)
+
+password_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+def create_access_token(
+    user_id: int,
+    email: str
+):
+    
+    expire = datetime.now(UTC) + timedelta(minutes=30)
+
+    payload = {
+        "sub": str(user_id),
+        "email": email,
+        "exp": expire
+    }
+
+    return jwt.encode(
+        payload,
+        SECRET_KEY,
+        algorithm=ALGORITHM
+    )
+
+def get_current_user(
+    authorization: str | None = Header(default=None)
+):
+    if authorization is None:
+        return None
+
+    if not authorization.startswith("Bearer "):
+        return None
+
+    token = authorization.split(" ")[1]
+
+    payload = verify_token(token)
+
+    if payload is None:
+        return None
+
+    user_id = int(payload["sub"])
+
+    session = SessionLocal()
+
+    user = session.scalar(
+        select(User).where(
+            User.id == user_id
+        )
+    )
+
+    session.close()
+
+    return user
+
+def verify_token(token: str):
+
+    try:
+        payload = jwt.decode(
+            token,
+            SECRET_KEY,
+            algorithms=[ALGORITHM]
+        )
+
+        return payload
+
+    except JWTError:
+        return None
+    
+def hash_password(password: str):
+    return password_context.hash(password)
+
+@app.post("/register")
+def register(request: RegisterRequest):
+    session = SessionLocal()
+
+    existing_user = session.scalar(
+        select(User).where(
+            User.email == request.email
+        )
+    )
+
+    if existing_user:
+        session.close()
+        raise HTTPException(
+        status_code=409,
+        detail="user already exists"
+    )
+        
+    hashed_password = hash_password(request.password)
+    new_user = User(
+        email=request.email,
+        password_hash=hashed_password
+    )
+
+    session.add(new_user)
+
+    session.commit()
+
+    session.close()
+
+    return {"message": "user registered successfully"}
+
+def verify_password(password: str, hashed_password: str):
+    return password_context.verify(password, hashed_password)
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+@app.post("/login")
+def login(request: LoginRequest):
+    session = SessionLocal()
+
+    existing_user = session.scalar(
+        select(User).where(
+            User.email == request.email
+        )
+    )
+
+    if not existing_user:
+        session.close()
+
+        raise HTTPException(
+            status_code=401,
+            detail="invalid credentials"
+        )
+    
+    if not verify_password(request.password, existing_user.password_hash):
+        session.close()
+        raise HTTPException(
+            status_code=401,
+            detail="invalid credentials"
+        )
+
+    token = create_access_token(
+    existing_user.id,
+    existing_user.email
+    )
+    session.close()
+    return {
+        "access_token": token,
+        "token_type": "bearer"
+    }
+
+@app.get("/me")
+def me(
+    current_user: User | None = Depends(
+        get_current_user
+    )
+):
+    if current_user is None:
+        raise HTTPException(
+            status_code=401,
+            detail="unauthorized"
+        )
+
+    return {
+        "id": current_user.id,
+        "email": current_user.email
+    }
+
+#cd ~/projects/cloud-social-platform/services/auth-service
+#source venv/bin/activate
+#uvicorn main:app --reload --port 8001
+# {
+#   "email": "alice@example.com",
+#   "password": "Password123!"
+# }
