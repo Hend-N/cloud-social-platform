@@ -40,3 +40,24 @@ services:
       - "8006:8000"
     env_file:
       - .env
+
+  gateway:
+    build: ./gateway
+    ports:
+      - "8080:8000"
+    env_file:
+      - .env
+    environment:
+      AUTH_SERVICE_URL: http://auth-service:8000
+      USER_SERVICE_URL: http://user-service:8000
+      POST_SERVICE_URL: http://post-service:8000
+      LIKE_SERVICE_URL: http://like-service:8000
+      FOLLOW_SERVICE_URL: http://follow-service:8000
+      COMMENT_SERVICE_URL: http://comment-service:8000
+    depends_on:
+      - auth-service
+      - user-service
+      - post-service
+      - like-service
+      - follow-service
+      - comment-service
