@@ -5,6 +5,7 @@ from jose import jwt, JWTError
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy import UniqueConstraint
 
 app = FastAPI()
 
@@ -20,9 +21,13 @@ class Base(DeclarativeBase):
 class Like(Base):
     __tablename__ = "likes"
 
+    __table_args__ = (
+        UniqueConstraint("user_id", "post_id", name="unique_user_post_like"),
+    )
+
     id: Mapped[int] = mapped_column(
-    primary_key=True,
-    autoincrement=True
+        primary_key=True,
+        autoincrement=True
     )
 
     user_id: Mapped[int] = mapped_column()
@@ -76,10 +81,10 @@ def like(
         ).first()
             
         if existing_like:
-            raise HTTPException(
-                status_code=400,
-                detail="post already liked"
-            )
+            return {
+                "message": "Post already liked",
+                "liked": True
+            }
 
         new_like = Like(user_id=user_id, post_id=post_id)
         session.add(new_like)
@@ -100,10 +105,10 @@ def unlike(
         ).first()
 
         if not existing_like:
-            raise HTTPException(
-                status_code=400,
-                detail="post not liked"
-            )
+            return {
+                "message": "Post already unliked",
+                "liked": False
+            }
         
         session.delete(existing_like)
         session.commit()
@@ -116,7 +121,7 @@ def get_like_count(post_id : int):
         count = session.query(Like).filter(Like.post_id ==post_id).count()
         return {
         "post_id" : post_id,
-        "like_ count" : count
+        "like_count" : count
         }
 
 @app.get("/health")

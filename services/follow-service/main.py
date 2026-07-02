@@ -6,6 +6,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.orm import sessionmaker
 from dotenv import load_dotenv
+from sqlalchemy import UniqueConstraint
 
 load_dotenv()
 SECRET_KEY = os.getenv("SECRET_KEY")
@@ -19,10 +20,14 @@ class Base(DeclarativeBase):
     pass
 
 class FollowRequest(BaseModel):
-    target_user_id: int
+    target_user_id: int = Field(gt=0)
 
 class Follow(Base):
     __tablename__ = "follows"
+
+    __table_args__ = (
+        UniqueConstraint("follower_id", "following_id", name="unique_follow"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
 
@@ -67,10 +72,10 @@ def follow(
         ).first()
 
         if existing_follow:
-            raise HTTPException(
-                status_code=400,
-                detail="already following"
-            )
+            return {
+                "message": "Already following",
+                "following": True
+            }
 
         new_follow = Follow(
             follower_id=user_id,
@@ -99,10 +104,10 @@ def unfollow(
         ).first()
 
         if not existing_follow:
-            raise HTTPException(
-                status_code=400,
-                detail="you dont follow them"
-            )
+            return {
+                "message": "Already not following",
+                "following": False
+            }
 
         session.delete(existing_follow)
         session.commit()

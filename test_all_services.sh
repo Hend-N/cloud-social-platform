@@ -1,8 +1,8 @@
 #!/bin/bash
 
-set -e
+set -euo pipefail
 
-GATEWAY_URL="http://127.0.0.1:8080"
+GATEWAY_URL="${GATEWAY_URL:-http://127.0.0.1:8080}"
 
 AUTH_URL="$GATEWAY_URL/api/auth"
 USER_URL="$GATEWAY_URL/api/users"
@@ -18,76 +18,294 @@ USER1="user1_$RUN_ID@test.com"
 USER2="user2_$RUN_ID@test.com"
 USER3="user3_$RUN_ID@test.com"
 
-echo "=== Health checks ==="
-curl -s "$GATEWAY_URL/health"; echo
+json_get() {
+    python3 -c '
+import sys, json
 
-echo "=== Register users ==="
-curl -s -X POST "$AUTH_URL/register" -H "Content-Type: application/json" -d "{\"email\":\"$USER1\",\"password\":\"$PASS\"}"; echo
-curl -s -X POST "$AUTH_URL/register" -H "Content-Type: application/json" -d "{\"email\":\"$USER2\",\"password\":\"$PASS\"}"; echo
-curl -s -X POST "$AUTH_URL/register" -H "Content-Type: application/json" -d "{\"email\":\"$USER3\",\"password\":\"$PASS\"}"; echo
+data = json.load(sys.stdin)
+path = sys.argv[1].split(".")
 
-echo "=== Login users ==="
-TOKEN1=$(curl -s -X POST "$AUTH_URL/login" -H "Content-Type: application/json" -d "{\"email\":\"$USER1\",\"password\":\"$PASS\"}" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
-TOKEN2=$(curl -s -X POST "$AUTH_URL/login" -H "Content-Type: application/json" -d "{\"email\":\"$USER2\",\"password\":\"$PASS\"}" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
-TOKEN3=$(curl -s -X POST "$AUTH_URL/login" -H "Content-Type: application/json" -d "{\"email\":\"$USER3\",\"password\":\"$PASS\"}" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+for key in path:
+    if key.isdigit():
+        data = data[int(key)]
+    else:
+        data = data[key]
+
+print(data)
+' "$1"
+}
+
+section() {
+    echo
+    echo "========================================"
+    echo "$1"
+    echo "========================================"
+}
+
+request() {
+    curl -sS -f "$@"
+}
+
+section "Health checks"
+request "$GATEWAY_URL/health"
+echo
+
+section "Register users"
+request -X POST "$AUTH_URL/register" \
+    -H "Content-Type: application/json" \
+    -d "{\"email\":\"$USER1\",\"password\":\"$PASS\"}"
+echo
+
+request -X POST "$AUTH_URL/register" \
+    -H "Content-Type: application/json" \
+    -d "{\"email\":\"$USER2\",\"password\":\"$PASS\"}"
+echo
+
+request -X POST "$AUTH_URL/register" \
+    -H "Content-Type: application/json" \
+    -d "{\"email\":\"$USER3\",\"password\":\"$PASS\"}"
+echo
+
+section "Login users"
+TOKEN1=$(request -X POST "$AUTH_URL/login" \
+    -H "Content-Type: application/json" \
+    -d "{\"email\":\"$USER1\",\"password\":\"$PASS\"}" | json_get "access_token")
+
+TOKEN2=$(request -X POST "$AUTH_URL/login" \
+    -H "Content-Type: application/json" \
+    -d "{\"email\":\"$USER2\",\"password\":\"$PASS\"}" | json_get "access_token")
+
+TOKEN3=$(request -X POST "$AUTH_URL/login" \
+    -H "Content-Type: application/json" \
+    -d "{\"email\":\"$USER3\",\"password\":\"$PASS\"}" | json_get "access_token")
 
 echo "Tokens created."
 
-echo "=== Test /me ==="
-curl -s "$AUTH_URL/me" -H "Authorization: Bearer $TOKEN1"; echo
-curl -s "$AUTH_URL/me" -H "Authorization: Bearer $TOKEN2"; echo
-curl -s "$AUTH_URL/me" -H "Authorization: Bearer $TOKEN3"; echo
+section "Test /me and extract user IDs"
+ME1=$(request "$AUTH_URL/me" -H "Authorization: Bearer $TOKEN1")
+ME2=$(request "$AUTH_URL/me" -H "Authorization: Bearer $TOKEN2")
+ME3=$(request "$AUTH_URL/me" -H "Authorization: Bearer $TOKEN3")
 
-echo "=== Create profiles ==="
-curl -s -X POST "$USER_URL/me" -H "Authorization: Bearer $TOKEN1" -H "Content-Type: application/json" -d "{\"username\":\"user1_$RUN_ID\",\"display_name\":\"User One\",\"bio\":\"Bio one\"}"; echo
-curl -s -X POST "$USER_URL/me" -H "Authorization: Bearer $TOKEN2" -H "Content-Type: application/json" -d "{\"username\":\"user2_$RUN_ID\",\"display_name\":\"User Two\",\"bio\":\"Bio two\"}"; echo
-curl -s -X POST "$USER_URL/me" -H "Authorization: Bearer $TOKEN3" -H "Content-Type: application/json" -d "{\"username\":\"user3_$RUN_ID\",\"display_name\":\"User Three\",\"bio\":\"Bio three\"}"; echo
+echo "$ME1"
+echo "$ME2"
+echo "$ME3"
 
-echo "=== Get profile ==="
-curl -s "$USER_URL/user1_$RUN_ID"; echo
+USER1_ID=$(echo "$ME1" | json_get "id")
+USER2_ID=$(echo "$ME2" | json_get "id")
+USER3_ID=$(echo "$ME3" | json_get "id")
 
-echo "=== Update profile ==="
-curl -s -X PUT "$USER_URL/me" -H "Authorization: Bearer $TOKEN1" -H "Content-Type: application/json" -d "{\"username\":\"user1updated_$RUN_ID\",\"display_name\":\"User One Updated\",\"bio\":\"Updated bio\"}"; echo
+echo "USER1_ID=$USER1_ID"
+echo "USER2_ID=$USER2_ID"
+echo "USER3_ID=$USER3_ID"
 
-echo "=== Create posts ==="
-curl -s -X POST "$POST_URL/me" -H "Authorization: Bearer $TOKEN1" -H "Content-Type: application/json" -d '{"content":"Post from user 1"}'; echo
-curl -s -X POST "$POST_URL/me" -H "Authorization: Bearer $TOKEN2" -H "Content-Type: application/json" -d '{"content":"Post from user 2"}'; echo
+section "Create profiles"
+request -X POST "$USER_URL/me" \
+    -H "Authorization: Bearer $TOKEN1" \
+    -H "Content-Type: application/json" \
+    -d "{\"username\":\"user1_$RUN_ID\",\"display_name\":\"User One\",\"bio\":\"Bio one\"}"
+echo
 
-echo "=== Get posts ==="
-curl -s "$POST_URL"; echo
-curl -s "$POST_URL/me" -H "Authorization: Bearer $TOKEN1"; echo
+request -X POST "$USER_URL/me" \
+    -H "Authorization: Bearer $TOKEN2" \
+    -H "Content-Type: application/json" \
+    -d "{\"username\":\"user2_$RUN_ID\",\"display_name\":\"User Two\",\"bio\":\"Bio two\"}"
+echo
 
-echo "=== Update post 1 ==="
-curl -s -X PUT "$POST_URL/1" -H "Authorization: Bearer $TOKEN1" -H "Content-Type: application/json" -d '{"content":"Updated post from user 1"}'; echo
+request -X POST "$USER_URL/me" \
+    -H "Authorization: Bearer $TOKEN3" \
+    -H "Content-Type: application/json" \
+    -d "{\"username\":\"user3_$RUN_ID\",\"display_name\":\"User Three\",\"bio\":\"Bio three\"}"
+echo
 
-echo "=== Likes ==="
-curl -s -X POST "$LIKE_URL/posts/1" -H "Authorization: Bearer $TOKEN2"; echo
-curl -s -X POST "$LIKE_URL/posts/1" -H "Authorization: Bearer $TOKEN3"; echo
-curl -s "$LIKE_URL/posts/1/count"; echo
-curl -s "$LIKE_URL/me" -H "Authorization: Bearer $TOKEN2"; echo
-curl -s -X DELETE "$LIKE_URL/posts/1" -H "Authorization: Bearer $TOKEN2"; echo
-curl -s "$LIKE_URL/posts/1/count"; echo
+section "Get public profile"
+request "$USER_URL/user1_$RUN_ID"
+echo
 
-echo "=== Comments ==="
-curl -s -X POST "$COMMENT_URL" -H "Authorization: Bearer $TOKEN2" -H "Content-Type: application/json" -d '{"post_id":1,"comment":"User 2 comment"}'; echo
-curl -s -X POST "$COMMENT_URL" -H "Authorization: Bearer $TOKEN3" -H "Content-Type: application/json" -d '{"post_id":1,"comment":"User 3 comment"}'; echo
-curl -s "$COMMENT_URL/post/1"; echo
-curl -s "$COMMENT_URL/user/me" -H "Authorization: Bearer $TOKEN2"; echo
-curl -s -X PUT "$COMMENT_URL/1" -H "Authorization: Bearer $TOKEN2" -H "Content-Type: application/json" -d '{"post_id":1,"comment":"Updated user 2 comment"}'; echo
+section "Update profile"
+request -X PUT "$USER_URL/me" \
+    -H "Authorization: Bearer $TOKEN1" \
+    -H "Content-Type: application/json" \
+    -d "{\"username\":\"user1updated_$RUN_ID\",\"display_name\":\"User One Updated\",\"bio\":\"Updated bio\"}"
+echo
 
-echo "=== Follows ==="
-curl -s -X POST "$FOLLOW_URL" -H "Authorization: Bearer $TOKEN1" -H "Content-Type: application/json" -d '{"target_user_id":2}'; echo
-curl -s -X POST "$FOLLOW_URL" -H "Authorization: Bearer $TOKEN1" -H "Content-Type: application/json" -d '{"target_user_id":3}'; echo
-curl -s "$FOLLOW_URL/me" -H "Authorization: Bearer $TOKEN1"; echo
-curl -s "$FOLLOW_URL/me/followers" -H "Authorization: Bearer $TOKEN2"; echo
-curl -s "$FOLLOW_URL/users/1/following"; echo
-curl -s "$FOLLOW_URL/users/2/followers"; echo
-curl -s -X DELETE "$FOLLOW_URL/2" -H "Authorization: Bearer $TOKEN1"; echo
-curl -s "$FOLLOW_URL/me" -H "Authorization: Bearer $TOKEN1"; echo
+section "Create posts and extract post IDs"
+POST1_RESPONSE=$(request -X POST "$POST_URL/me" \
+    -H "Authorization: Bearer $TOKEN1" \
+    -H "Content-Type: application/json" \
+    -d '{"content":"Post from user 1"}')
 
-echo "=== Delete tests ==="
-curl -s -X DELETE "$COMMENT_URL/1" -H "Authorization: Bearer $TOKEN2"; echo
-curl -s -X DELETE "$POST_URL/1" -H "Authorization: Bearer $TOKEN1"; echo
-curl -s -X DELETE "$USER_URL/profiles/me" -H "Authorization: Bearer $TOKEN3"; echo
+POST2_RESPONSE=$(request -X POST "$POST_URL/me" \
+    -H "Authorization: Bearer $TOKEN2" \
+    -H "Content-Type: application/json" \
+    -d '{"content":"Post from user 2"}')
 
-echo "=== DONE ==="
+echo "$POST1_RESPONSE"
+echo "$POST2_RESPONSE"
+
+POST1_ID=$(echo "$POST1_RESPONSE" | json_get "post_id")
+POST2_ID=$(echo "$POST2_RESPONSE" | json_get "post_id")
+
+echo "POST1_ID=$POST1_ID"
+echo "POST2_ID=$POST2_ID"
+
+section "Get posts"
+request "$POST_URL"
+echo
+
+request "$POST_URL/me" \
+    -H "Authorization: Bearer $TOKEN1"
+echo
+
+section "Update post"
+request -X PUT "$POST_URL/$POST1_ID" \
+    -H "Authorization: Bearer $TOKEN1" \
+    -H "Content-Type: application/json" \
+    -d '{"content":"Updated post from user 1"}'
+echo
+
+section "Likes"
+request -X POST "$LIKE_URL/posts/$POST1_ID" \
+    -H "Authorization: Bearer $TOKEN2"
+echo
+
+request -X POST "$LIKE_URL/posts/$POST1_ID" \
+    -H "Authorization: Bearer $TOKEN3"
+echo
+
+request "$LIKE_URL/posts/$POST1_ID/count"
+echo
+
+request "$LIKE_URL/me" \
+    -H "Authorization: Bearer $TOKEN2"
+echo
+
+request -X DELETE "$LIKE_URL/posts/$POST1_ID" \
+    -H "Authorization: Bearer $TOKEN2"
+echo
+
+request "$LIKE_URL/posts/$POST1_ID/count"
+echo
+
+section "Like idempotency test"
+request -X POST "$LIKE_URL/posts/$POST1_ID" \
+    -H "Authorization: Bearer $TOKEN3"
+echo
+
+request -X POST "$LIKE_URL/posts/$POST1_ID" \
+    -H "Authorization: Bearer $TOKEN3"
+echo
+
+request -X DELETE "$LIKE_URL/posts/$POST1_ID" \
+    -H "Authorization: Bearer $TOKEN3"
+echo
+
+request -X DELETE "$LIKE_URL/posts/$POST1_ID" \
+    -H "Authorization: Bearer $TOKEN3"
+echo
+
+section "Comments and extract comment IDs"
+COMMENT1_RESPONSE=$(request -X POST "$COMMENT_URL" \
+    -H "Authorization: Bearer $TOKEN2" \
+    -H "Content-Type: application/json" \
+    -d "{\"post_id\":$POST1_ID,\"comment\":\"User 2 comment\"}")
+
+COMMENT2_RESPONSE=$(request -X POST "$COMMENT_URL" \
+    -H "Authorization: Bearer $TOKEN3" \
+    -H "Content-Type: application/json" \
+    -d "{\"post_id\":$POST1_ID,\"comment\":\"User 3 comment\"}")
+
+echo "$COMMENT1_RESPONSE"
+echo "$COMMENT2_RESPONSE"
+
+COMMENT1_ID=$(echo "$COMMENT1_RESPONSE" | json_get "id")
+COMMENT2_ID=$(echo "$COMMENT2_RESPONSE" | json_get "id")
+
+echo "COMMENT1_ID=$COMMENT1_ID"
+echo "COMMENT2_ID=$COMMENT2_ID"
+
+request "$COMMENT_URL/post/$POST1_ID"
+echo
+
+request "$COMMENT_URL/user/me" \
+    -H "Authorization: Bearer $TOKEN2"
+echo
+
+section "Update comment"
+request -X PUT "$COMMENT_URL/$COMMENT1_ID" \
+    -H "Authorization: Bearer $TOKEN2" \
+    -H "Content-Type: application/json" \
+    -d '{"comment":"Updated user 2 comment"}'
+echo
+
+section "Follows"
+request -X POST "$FOLLOW_URL" \
+    -H "Authorization: Bearer $TOKEN1" \
+    -H "Content-Type: application/json" \
+    -d "{\"target_user_id\":$USER2_ID}"
+echo
+
+request -X POST "$FOLLOW_URL" \
+    -H "Authorization: Bearer $TOKEN1" \
+    -H "Content-Type: application/json" \
+    -d "{\"target_user_id\":$USER3_ID}"
+echo
+
+request "$FOLLOW_URL/me" \
+    -H "Authorization: Bearer $TOKEN1"
+echo
+
+request "$FOLLOW_URL/me/followers" \
+    -H "Authorization: Bearer $TOKEN2"
+echo
+
+request "$FOLLOW_URL/users/$USER1_ID/following"
+echo
+
+request "$FOLLOW_URL/users/$USER2_ID/followers"
+echo
+
+section "Follow idempotency test"
+request -X POST "$FOLLOW_URL" \
+    -H "Authorization: Bearer $TOKEN1" \
+    -H "Content-Type: application/json" \
+    -d "{\"target_user_id\":$USER3_ID}"
+echo
+
+request -X POST "$FOLLOW_URL" \
+    -H "Authorization: Bearer $TOKEN1" \
+    -H "Content-Type: application/json" \
+    -d "{\"target_user_id\":$USER3_ID}"
+echo
+
+request -X DELETE "$FOLLOW_URL/$USER3_ID" \
+    -H "Authorization: Bearer $TOKEN1"
+echo
+
+request -X DELETE "$FOLLOW_URL/$USER3_ID" \
+    -H "Authorization: Bearer $TOKEN1"
+echo
+
+section "Unfollow user 2"
+request -X DELETE "$FOLLOW_URL/$USER2_ID" \
+    -H "Authorization: Bearer $TOKEN1"
+echo
+
+request "$FOLLOW_URL/me" \
+    -H "Authorization: Bearer $TOKEN1"
+echo
+
+section "Delete tests"
+request -X DELETE "$COMMENT_URL/$COMMENT1_ID" \
+    -H "Authorization: Bearer $TOKEN2"
+echo
+
+request -X DELETE "$POST_URL/$POST1_ID" \
+    -H "Authorization: Bearer $TOKEN1"
+echo
+
+request -X DELETE "$USER_URL/me" \
+    -H "Authorization: Bearer $TOKEN3"
+echo
+
+section "DONE"
+echo "All gateway integration tests passed."

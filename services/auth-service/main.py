@@ -73,31 +73,46 @@ def get_current_user(
     authorization: str | None = Header(default=None)
 ):
     if authorization is None:
-        return None
+        raise HTTPException(
+            status_code=401,
+            detail="missing authorization header"
+        )
 
     if not authorization.startswith("Bearer "):
-        return None
+        raise HTTPException(
+            status_code=401,
+            detail="invalid authorization header"
+        )
 
-    token = authorization.split(" ")[1]
+    token = authorization.split(" ", 1)[1]
 
     payload = verify_token(token)
 
     if payload is None:
-        return None
+        raise HTTPException(
+            status_code=401,
+            detail="invalid token"
+        )
 
     user_id = int(payload["sub"])
 
     session = SessionLocal()
 
-    user = session.scalar(
-        select(User).where(
-            User.id == user_id
+    try:
+        user = session.scalar(
+            select(User).where(User.id == user_id)
         )
-    )
 
-    session.close()
+        if user is None:
+            raise HTTPException(
+                status_code=401,
+                detail="user no longer exists"
+            )
 
-    return user
+        return user
+
+    finally:
+        session.close()
 
 def verify_token(token: str):
 
@@ -118,34 +133,28 @@ def hash_password(password: str):
 
 @app.post("/register")
 def register(request: RegisterRequest):
-    session = SessionLocal()
-
-    existing_user = session.scalar(
-        select(User).where(
-            User.email == request.email
+    with SessionLocal() as session:
+        existing_user = session.scalar(
+            select(User).where(User.email == request.email)
         )
-    )
 
-    if existing_user:
-        session.close()
-        raise HTTPException(
-        status_code=409,
-        detail="user already exists"
-    )
-        
-    hashed_password = hash_password(request.password)
-    new_user = User(
-        email=request.email,
-        password_hash=hashed_password
-    )
+        if existing_user:
+            raise HTTPException(
+                status_code=409,
+                detail="user already exists"
+            )
 
-    session.add(new_user)
+        hashed_password = hash_password(request.password)
 
-    session.commit()
+        new_user = User(
+            email=request.email,
+            password_hash=hashed_password
+        )
 
-    session.close()
+        session.add(new_user)
+        session.commit()
 
-    return {"message": "user registered successfully"}
+        return {"message": "user registered successfully"}
 
 def verify_password(password: str, hashed_password: str):
     return password_context.verify(password, hashed_password)
@@ -156,51 +165,35 @@ def health():
 
 @app.post("/login")
 def login(request: LoginRequest):
-    session = SessionLocal()
-
-    existing_user = session.scalar(
-        select(User).where(
-            User.email == request.email
-        )
-    )
-
-    if not existing_user:
-        session.close()
-
-        raise HTTPException(
-            status_code=401,
-            detail="invalid credentials"
-        )
-    
-    if not verify_password(request.password, existing_user.password_hash):
-        session.close()
-        raise HTTPException(
-            status_code=401,
-            detail="invalid credentials"
+    with SessionLocal() as session:
+        existing_user = session.scalar(
+            select(User).where(User.email == request.email)
         )
 
-    token = create_access_token(
-    existing_user.id,
-    existing_user.email
-    )
-    session.close()
-    return {
-        "access_token": token,
-        "token_type": "bearer"
-    }
+        if not existing_user:
+            raise HTTPException(
+                status_code=401,
+                detail="invalid credentials"
+            )
+
+        if not verify_password(request.password, existing_user.password_hash):
+            raise HTTPException(
+                status_code=401,
+                detail="invalid credentials"
+            )
+
+        token = create_access_token(
+            existing_user.id,
+            existing_user.email
+        )
+
+        return {
+            "access_token": token,
+            "token_type": "bearer"
+        }
 
 @app.get("/me")
-def me(
-    current_user: User | None = Depends(
-        get_current_user
-    )
-):
-    if current_user is None:
-        raise HTTPException(
-            status_code=401,
-            detail="unauthorized"
-        )
-
+def me(current_user: User = Depends(get_current_user)):
     return {
         "id": current_user.id,
         "email": current_user.email

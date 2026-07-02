@@ -2,14 +2,13 @@ import os
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
 from jose import jwt, JWTError
-from datetime import datetime, timedelta, UTC
+from datetime import datetime, UTC
 from fastapi import Header, HTTPException, Depends
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy import String
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy import select
 from dotenv import load_dotenv
 
 app = FastAPI()
@@ -79,8 +78,13 @@ def create_post(request: CreatePostRequest, current_user_id: int = Depends(get_c
         session.add(new_post)
         session.commit()
         session.refresh(new_post)
-        return {"content": new_post.content, "created_at": new_post.created_at.isoformat()}
-    
+        return {
+            "post_id": new_post.post_id,
+            "user_id": new_post.user_id,
+            "content": new_post.content,
+            "created_at": new_post.created_at.isoformat()
+        }
+            
     finally:
         session.close()
 
@@ -90,11 +94,13 @@ def delete_post(post_id: int, current_user_id: int = Depends(get_current_user_id
     try: 
         post = session.query(Post).filter(Post.post_id == post_id).first()
         if post is None:
-            session.close()
             raise HTTPException(status_code=404, detail="post not found")
+
         if post.user_id != current_user_id:
-            session.close()
-            raise HTTPException(status_code=403, detail="not authorized to delete this post")
+            raise HTTPException(
+                status_code=403,
+                detail="not authorized to delete this post"
+            )
         
         session.delete(post)
         session.commit()
@@ -107,13 +113,17 @@ def get_posts():
     session = SessionLocal()
     try:
         posts = session.query(Post).order_by(Post.created_at.desc()).all()
+
         return [
             {
+                "post_id": post.post_id,
+                "user_id": post.user_id,
                 "content": post.content,
                 "created_at": post.created_at.isoformat()
             }
             for post in posts
         ]
+
     finally:
         session.close()
 
@@ -121,14 +131,20 @@ def get_posts():
 def get_my_posts(current_user_id: int = Depends(get_current_user_id)):
     session = SessionLocal()
     try:
-        posts = session.query(Post).filter(Post.user_id == current_user_id).order_by(Post.created_at.desc()).all()
+        posts = session.query(Post).filter(
+            Post.user_id == current_user_id
+        ).order_by(Post.created_at.desc()).all()
+
         return [
             {
+                "post_id": post.post_id,
+                "user_id": post.user_id,
                 "content": post.content,
                 "created_at": post.created_at.isoformat()
             }
             for post in posts
         ]
+
     finally:
         session.close()
 
@@ -146,7 +162,12 @@ def update_post(post_id: int, request: CreatePostRequest, current_user_id: int =
         post.content = request.content
         session.commit()
         session.refresh(post)
-        return {"content": post.content, "created_at": post.created_at.isoformat()}
+        return {
+            "post_id": post.post_id,
+            "user_id": post.user_id,
+            "content": post.content,
+            "created_at": post.created_at.isoformat()
+        }
     finally:
         session.close()
 

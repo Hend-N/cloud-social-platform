@@ -6,6 +6,7 @@ from jose import jwt, JWTError
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy import String
 
 app = FastAPI()
 
@@ -27,10 +28,13 @@ class Comment(Base):
 
     post_id: Mapped[int] = mapped_column()
 
-    comment: Mapped[str] = mapped_column()
+    comment: Mapped[str] = mapped_column(String(300))
 
 class CreateCommentRequest(BaseModel):
     post_id: int
+    comment: str = Field(min_length=1, max_length=300)
+
+class UpdateCommentRequest(BaseModel):
     comment: str = Field(min_length=1, max_length=300)
 
 DATABASE_URL = "sqlite:///comments.db"
@@ -98,7 +102,7 @@ def delete_comment(comment_id: int, user_id: int = Depends(get_current_user_id))
 @app.put("/comments/{comment_id}")
 def update_comment(
     comment_id: int,
-    request: CreateCommentRequest,
+    request: UpdateCommentRequest,
     user_id: int = Depends(get_current_user_id)
 ):
     with SessionLocal() as session:
@@ -110,9 +114,11 @@ def update_comment(
             raise HTTPException(status_code=404, detail="comment not found")
 
         if comment.user_id != user_id:
-            raise HTTPException(status_code=403, detail="not authorized to edit this comment")
+            raise HTTPException(
+                status_code=403,
+                detail="not authorized to edit this comment"
+            )
 
-        comment.post_id = request.post_id
         comment.comment = request.comment
 
         session.commit()
