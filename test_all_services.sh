@@ -2,6 +2,11 @@
 
 set -euo pipefail
 
+clear_redis_rate_limits() {
+  docker compose exec -T redis redis-cli --scan --pattern "gateway:rate_limit:*" \
+    | xargs -r docker compose exec -T redis redis-cli DEL > /dev/null
+}
+
 GATEWAY_URL="${GATEWAY_URL:-http://127.0.0.1:8080}"
 
 AUTH_URL="$GATEWAY_URL/api/auth"

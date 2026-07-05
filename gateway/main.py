@@ -5,6 +5,7 @@ import json
 import httpx
 import asyncio
 import logging
+import redis.asyncio as redis
 from datetime import datetime, UTC
 from contextlib import asynccontextmanager
 
@@ -29,7 +30,7 @@ if SECRET_KEY is None:
 ALGORITHM = "HS256"
 
 # ============================================================
-# 2. LOGGING CONFIGURATION/ MESSAGE SIZE/ RETRY CONFIGURATION
+# 2. LOGGING CONFIGURATION/ MESSAGE SIZE/ RETRY CONFIGURATION/ REDIS
 # ============================================================
 
 RETRY_ATTEMPTS = max(
@@ -57,6 +58,21 @@ CIRCUIT_FAILURE_THRESHOLD = int(
 
 CIRCUIT_COOLDOWN_SECONDS = float(
     os.getenv("CIRCUIT_COOLDOWN_SECONDS", "10")
+)
+
+REDIS_URL = os.getenv(
+    "REDIS_URL",
+    "redis://redis:6379/0"
+)
+
+RATE_LIMIT_BACKEND = os.getenv(
+    "RATE_LIMIT_BACKEND",
+    "memory"
+).lower()
+
+RATE_LIMIT_KEY_PREFIX = os.getenv(
+    "RATE_LIMIT_KEY_PREFIX",
+    "gateway:rate_limit"
 )
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -113,20 +129,36 @@ async def lifespan(app: FastAPI):
         )
     )
 
+    app.state.redis_client = None
+
+    if RATE_LIMIT_BACKEND == "redis":
+        app.state.redis_client = redis.from_url(
+            REDIS_URL,
+            decode_responses=True
+        )
+
+        await app.state.redis_client.ping()
+
     log_event(
-    "gateway_startup",
-    shared_http_client_created=True,
-    timeout_seconds=10.0
-)
+        "gateway_startup",
+        shared_http_client_created=True,
+        redis_enabled=RATE_LIMIT_BACKEND == "redis",
+        redis_url=REDIS_URL if RATE_LIMIT_BACKEND == "redis" else None,
+        timeout_seconds=10.0
+    )
 
     yield
 
     await app.state.http_client.aclose()
 
+    if app.state.redis_client is not None:
+        await app.state.redis_client.aclose()
+
     log_event(
-    "gateway_shutdown",
-    shared_http_client_closed=True
-)
+        "gateway_shutdown",
+        shared_http_client_closed=True,
+        redis_client_closed=app.state.redis_client is not None
+    )
 
 
 app = FastAPI(lifespan=lifespan)
@@ -663,7 +695,7 @@ def get_rate_limit_key(request: Request, rule: dict):
     return f"{rule['name']}:{identity}"
 
 
-def check_rate_limit(request: Request):
+def check_memory_rate_limit(request: Request):
     """
     Apply token bucket rate limiting.
 
@@ -713,6 +745,162 @@ def check_rate_limit(request: Request):
     retry_after = int((1 - bucket["tokens"]) / refill_rate) + 1
 
     return False, retry_after, rule
+
+REDIS_TOKEN_BUCKET_SCRIPT = """
+    local key = KEYS[1]
+
+    local capacity = tonumber(ARGV[1])
+    local refill_rate = tonumber(ARGV[2])
+    local now = tonumber(ARGV[3])
+    local ttl_seconds = tonumber(ARGV[4])
+
+    local bucket = redis.call("HMGET", key, "tokens", "last_refill")
+
+    local tokens = tonumber(bucket[1])
+    local last_refill = tonumber(bucket[2])
+
+    if tokens == nil then
+        tokens = capacity
+    end
+
+    if last_refill == nil then
+        last_refill = now
+    end
+
+    local elapsed = now - last_refill
+
+    if elapsed < 0 then
+        elapsed = 0
+    end
+
+    local refill_amount = elapsed * refill_rate
+
+    tokens = math.min(capacity, tokens + refill_amount)
+
+    local allowed = 0
+    local retry_after = 0
+
+    if tokens >= 1 then
+        allowed = 1
+        tokens = tokens - 1
+    else
+        retry_after = math.ceil((1 - tokens) / refill_rate)
+    end
+
+    redis.call("HSET", key, "tokens", tokens, "last_refill", now)
+    redis.call("EXPIRE", key, ttl_seconds)
+
+    return {allowed, retry_after, tokens}
+    """
+
+def get_rate_limit_bucket_ttl(rule: dict):
+    """
+    Decide how long Redis should keep an unused rate-limit bucket.
+
+    Example:
+    capacity = 60
+    refill_rate = 1 token/sec
+
+    Full refill time is about 60 seconds.
+    We keep the key for at least twice that.
+    """
+
+    capacity = rule["capacity"]
+    refill_rate = rule["refill_rate"]
+
+    if refill_rate <= 0:
+        return 3600
+
+    full_refill_seconds = int(capacity / refill_rate)
+
+    return max(
+        60,
+        min(full_refill_seconds * 2, 86400)
+    )
+
+
+def build_redis_rate_limit_key(local_key: str):
+    """
+    Convert the local bucket key into a Redis key.
+
+    Example:
+    auth_login:ip:127.0.0.1
+
+    Becomes:
+    gateway:rate_limit:auth_login:ip:127.0.0.1
+    """
+
+    return f"{RATE_LIMIT_KEY_PREFIX}:{local_key}"
+
+
+async def check_redis_rate_limit(request: Request, rule: dict, local_key: str):
+    """
+    Apply token bucket rate limiting using Redis.
+
+    Returns:
+        allowed: bool
+        retry_after: int
+        rule: dict
+    """
+
+    redis_client = request.app.state.redis_client
+
+    if redis_client is None:
+        log_event(
+            "redis_rate_limit_unavailable",
+            level="warning",
+            path=request.url.path,
+            rule=rule["name"]
+        )
+
+        return True, 0, rule
+
+    redis_key = build_redis_rate_limit_key(local_key)
+
+    now = time.monotonic()
+    ttl_seconds = get_rate_limit_bucket_ttl(rule)
+
+    result = await redis_client.eval(
+        REDIS_TOKEN_BUCKET_SCRIPT,
+        1,
+        redis_key,
+        rule["capacity"],
+        rule["refill_rate"],
+        now,
+        ttl_seconds
+    )
+
+    allowed = int(result[0]) == 1
+    retry_after = int(result[1])
+
+    return allowed, retry_after, rule
+
+async def check_rate_limit(request: Request):
+    """
+    Apply rate limiting using the configured backend.
+
+    Supported backends:
+        memory
+        redis
+    """
+
+    path = request.url.path
+
+    if path in RATE_LIMIT_SKIP_PATHS:
+        return True, 0, None
+
+    rule = get_rate_limit_rule(request)
+    local_key = get_rate_limit_key(request, rule)
+
+    if RATE_LIMIT_BACKEND == "redis":
+        return await check_redis_rate_limit(
+            request=request,
+            rule=rule,
+            local_key=local_key
+        )
+
+    return check_memory_rate_limit(request)
+
 
 # ============================================================
 # 15. CIRCUIT BREAKER HELPERS
@@ -1498,7 +1686,7 @@ async def auth_rate_limit_and_logging_middleware(request: Request, call_next):
     # ------------------------------------------------------------
     # Auth happens before rate limiting so protected routes can be
     # rate-limited by user ID instead of only IP address.
-    allowed, retry_after, rate_limit_rule = check_rate_limit(request)
+    allowed, retry_after, rate_limit_rule = await check_rate_limit(request)
 
     if not allowed:
         duration = time.perf_counter() - start_time
@@ -1663,6 +1851,9 @@ async def metrics_json_endpoint():
     return {
         "gateway": "ok",
         "uptime_seconds": round(uptime_seconds, 4),
+
+        "rate_limit_backend": RATE_LIMIT_BACKEND,
+        "redis_enabled": RATE_LIMIT_BACKEND == "redis",
 
         "total_requests": total_requests,
         "rate_limited_requests": gateway_metrics["rate_limited_requests"],

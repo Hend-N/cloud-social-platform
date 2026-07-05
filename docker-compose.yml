@@ -55,6 +55,16 @@ services:
       - grafana-data:/var/lib/grafana
     depends_on:
       - prometheus
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
   gateway:
     build: ./gateway
@@ -69,6 +79,8 @@ services:
       LIKE_SERVICE_URL: http://like-service:8000
       FOLLOW_SERVICE_URL: http://follow-service:8000
       COMMENT_SERVICE_URL: http://comment-service:8000
+      REDIS_URL: redis://redis:6379/0
+      RATE_LIMIT_BACKEND: redis
     depends_on:
       - auth-service
       - user-service
@@ -76,6 +88,7 @@ services:
       - like-service
       - follow-service
       - comment-service
+      - redis
 
 volumes:
   prometheus-data:
