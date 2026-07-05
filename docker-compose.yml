@@ -1,63 +1,116 @@
 services:
   auth-service:
     build: ./services/auth-service
+    restart: unless-stopped
     env_file:
       - .env
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
 
   user-service:
     build: ./services/user-service
+    restart: unless-stopped
     env_file:
       - .env
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
 
   post-service:
     build: ./services/post-service
+    restart: unless-stopped
     env_file:
       - .env
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
 
   like-service:
     build: ./services/like-service
+    restart: unless-stopped
     env_file:
       - .env
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
 
   follow-service:
     build: ./services/follow-service
+    restart: unless-stopped
     env_file:
       - .env
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
 
   comment-service:
     build: ./services/comment-service
+    restart: unless-stopped
     env_file:
       - .env
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
 
-  prometheus:
-    image: prom/prometheus:latest
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheus-data:/prometheus
-    command:
-      - "--config.file=/etc/prometheus/prometheus.yml"
-      - "--storage.tsdb.path=/prometheus"
-    depends_on:
-      - gateway
-
-  grafana:
-    image: grafana/grafana:latest
-    ports:
-      - "3001:3000"
-    environment:
-      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER}
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
-    volumes:
-      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./observability/grafana/dashboards:/etc/grafana/dashboards:ro
-      - grafana-data:/var/lib/grafana
-    depends_on:
-      - prometheus
   redis:
     image: redis:7-alpine
     container_name: redis
+    restart: unless-stopped
     ports:
       - "6379:6379"
     healthcheck:
@@ -65,9 +118,11 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+      start_period: 5s
 
   gateway:
     build: ./gateway
+    restart: unless-stopped
     ports:
       - "8080:8000"
     env_file:
@@ -81,14 +136,65 @@ services:
       COMMENT_SERVICE_URL: http://comment-service:8000
       REDIS_URL: redis://redis:6379/0
       RATE_LIMIT_BACKEND: redis
+      RATE_LIMIT_KEY_PREFIX: gateway:rate_limit
     depends_on:
-      - auth-service
-      - user-service
-      - post-service
-      - like-service
-      - follow-service
-      - comment-service
-      - redis
+      auth-service:
+        condition: service_healthy
+      user-service:
+        condition: service_healthy
+      post-service:
+        condition: service_healthy
+      like-service:
+        condition: service_healthy
+      follow-service:
+        condition: service_healthy
+      comment-service:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+
+  prometheus:
+    image: prom/prometheus:latest
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+    depends_on:
+      gateway:
+        condition: service_healthy
+
+  grafana:
+    image: grafana/grafana:latest
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      prometheus:
+        condition: service_started
 
 volumes:
   prometheus-data:
