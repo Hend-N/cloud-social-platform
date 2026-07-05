@@ -29,11 +29,34 @@ if SECRET_KEY is None:
 ALGORITHM = "HS256"
 
 # ============================================================
-# 2. LOGGING CONFIGURATION
+# 2. LOGGING CONFIGURATION/ MESSAGE SIZE/ RETRY CONFIGURATION
 # ============================================================
+
+RETRY_ATTEMPTS = max(
+    1,
+    int(os.getenv("GATEWAY_RETRY_ATTEMPTS", "2"))
+)
+
+RETRY_BACKOFF_SECONDS = float(
+    os.getenv("GATEWAY_RETRY_BACKOFF_SECONDS", "0.15")
+)
+
+RETRYABLE_METHODS = {"GET", "HEAD", "OPTIONS"}
+
+RETRYABLE_STATUS_CODES = {502, 503, 504}
+
+CIRCUIT_FAILURE_STATUS_CODES = {500, 502, 503, 504}
 
 MAX_REQUEST_BODY_SIZE_BYTES = int(
     os.getenv("MAX_REQUEST_BODY_SIZE_BYTES", str(1024 * 1024))
+)
+
+CIRCUIT_FAILURE_THRESHOLD = int(
+    os.getenv("CIRCUIT_FAILURE_THRESHOLD", "3")
+)
+
+CIRCUIT_COOLDOWN_SECONDS = float(
+    os.getenv("CIRCUIT_COOLDOWN_SECONDS", "10")
 )
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -71,6 +94,8 @@ def log_event(event: str, level: str = "info", **fields):
         logger.warning(message)
     else:
         logger.info(message)
+
+
 
 
 # ============================================================
@@ -159,6 +184,14 @@ SERVICE_MAP = {
     },
 }
 
+circuit_breakers = {
+    service_name: {
+        "state": "closed",
+        "failure_count": 0,
+        "opened_at": None
+    }
+    for service_name in SERVICE_MAP
+}
 
 # ============================================================
 # 6. HEADER FILTERING CONFIGURATION
@@ -353,17 +386,22 @@ gateway_metrics = {
     "total_duration_seconds": 0.0,
     "max_duration_seconds": 0.0,
 
+    "retry_attempts": 0,
+    "requests_retried": 0,
+
     "rate_limited_requests": 0,
     "auth_failed_requests": 0,
     "gateway_error_requests": 0,
     "request_body_too_large": 0,
+
+    "circuit_opened_total": 0,
+    "circuit_rejected_requests": 0,
 
     "requests_by_method": {},
     "requests_by_status_code": {},
     "requests_by_service": {},
     "requests_by_rate_limit_rule": {},
 }
-
 
 # ============================================================
 # 10. PATH PATTERN HELPERS
@@ -676,9 +714,191 @@ def check_rate_limit(request: Request):
 
     return False, retry_after, rule
 
+# ============================================================
+# 15. CIRCUIT BREAKER HELPERS
+# ============================================================
+
+def get_circuit_breaker(service_name: str):
+    """
+    Return the circuit breaker state for a service.
+
+    Each service has its own circuit:
+        auth
+        users
+        posts
+        likes
+        follows
+        comments
+    """
+
+    return circuit_breakers[service_name]
+
+
+def should_allow_service_request(service_name: str):
+    """
+    Decide whether the gateway should call the downstream service.
+
+    Returns:
+        allowed: bool
+        retry_after: int
+
+    Circuit states:
+
+    closed:
+        Normal state. Requests are allowed.
+
+    open:
+        Service is considered unhealthy. Requests are rejected fast.
+
+    half-open:
+        Cooldown passed. Gateway allows a test request.
+    """
+
+    breaker = get_circuit_breaker(service_name)
+    state = breaker["state"]
+
+    if state == "closed":
+        return True, 0
+
+    if state == "open":
+        opened_at = breaker["opened_at"]
+
+        if opened_at is None:
+            breaker["opened_at"] = time.monotonic()
+            return False, int(CIRCUIT_COOLDOWN_SECONDS)
+
+        elapsed = time.monotonic() - opened_at
+
+        if elapsed >= CIRCUIT_COOLDOWN_SECONDS:
+            breaker["state"] = "half_open"
+
+            log_event(
+                "circuit_half_open",
+                level="warning",
+                service=service_name,
+                cooldown_seconds=CIRCUIT_COOLDOWN_SECONDS
+            )
+
+            return True, 0
+
+        retry_after = int(CIRCUIT_COOLDOWN_SECONDS - elapsed) + 1
+        return False, retry_after
+
+    if state == "half_open":
+        return True, 0
+
+    # Defensive fallback.
+    # If the state somehow becomes invalid, fail safe by opening it.
+    breaker["state"] = "open"
+    breaker["opened_at"] = time.monotonic()
+    return False, int(CIRCUIT_COOLDOWN_SECONDS)
+
+
+def record_service_success(service_name: str, request_id: str | None = None):
+    """
+    Record a successful downstream service call.
+
+    If the circuit was half-open, a success closes it again.
+    If there were previous failures, success resets the failure count.
+    """
+
+    breaker = get_circuit_breaker(service_name)
+
+    previous_state = breaker["state"]
+    previous_failure_count = breaker["failure_count"]
+
+    breaker["state"] = "closed"
+    breaker["failure_count"] = 0
+    breaker["opened_at"] = None
+
+    if previous_state != "closed" or previous_failure_count > 0:
+        log_event(
+            "circuit_closed",
+            request_id=request_id,
+            service=service_name,
+            previous_state=previous_state,
+            previous_failure_count=previous_failure_count
+        )
+
+
+def record_service_failure(
+    service_name: str,
+    request_id: str | None = None,
+    reason: str = "downstream_failure",
+    status_code: int | None = None,
+    error_type: str | None = None
+):
+    """
+    Record a downstream service failure.
+
+    If failures reach the threshold, open the circuit.
+
+    A failure while half-open immediately reopens the circuit.
+    """
+
+    breaker = get_circuit_breaker(service_name)
+
+    previous_state = breaker["state"]
+
+    if previous_state == "half_open":
+        breaker["state"] = "open"
+        breaker["failure_count"] = CIRCUIT_FAILURE_THRESHOLD
+        breaker["opened_at"] = time.monotonic()
+
+        gateway_metrics["circuit_opened_total"] += 1
+
+        log_event(
+            "circuit_reopened",
+            level="warning",
+            request_id=request_id,
+            service=service_name,
+            reason=reason,
+            status_code=status_code,
+            error_type=error_type,
+            failure_threshold=CIRCUIT_FAILURE_THRESHOLD,
+            cooldown_seconds=CIRCUIT_COOLDOWN_SECONDS
+        )
+
+        return
+
+    if previous_state == "open":
+        return
+
+    breaker["failure_count"] += 1
+
+    log_event(
+        "circuit_failure_recorded",
+        level="warning",
+        request_id=request_id,
+        service=service_name,
+        reason=reason,
+        status_code=status_code,
+        error_type=error_type,
+        failure_count=breaker["failure_count"],
+        failure_threshold=CIRCUIT_FAILURE_THRESHOLD
+    )
+
+    if breaker["failure_count"] >= CIRCUIT_FAILURE_THRESHOLD:
+        breaker["state"] = "open"
+        breaker["opened_at"] = time.monotonic()
+
+        gateway_metrics["circuit_opened_total"] += 1
+
+        log_event(
+            "circuit_opened",
+            level="warning",
+            request_id=request_id,
+            service=service_name,
+            reason=reason,
+            status_code=status_code,
+            error_type=error_type,
+            failure_count=breaker["failure_count"],
+            failure_threshold=CIRCUIT_FAILURE_THRESHOLD,
+            cooldown_seconds=CIRCUIT_COOLDOWN_SECONDS
+        )
 
 # ============================================================
-# 15. HEADER BUILDING
+# 16. HEADER BUILDING
 # ============================================================
 
 def build_forward_headers(request: Request):
@@ -744,7 +964,7 @@ def build_response_headers(service_response: httpx.Response, request_id: str):
 
 
 # ============================================================
-# 16. METRICS HELPERS
+# 17. METRICS HELPERS
 # ============================================================
 
 def increment_counter(counter: dict, key: str, amount: int = 1):
@@ -753,7 +973,7 @@ def increment_counter(counter: dict, key: str, amount: int = 1):
 
 
 def get_service_name_from_path(path: str):
-    if path in {"/health", "/metrics"}:
+    if path in {"/health", "/metrics", "/metrics/json"}:
         return "gateway"
 
     parts = path.strip("/").split("/")
@@ -1014,17 +1234,122 @@ def build_prometheus_metrics():
     lines.append("# HELP gateway_request_body_too_large_total Total requests rejected because the body was too large.")
     lines.append("# TYPE gateway_request_body_too_large_total counter")
     lines.append(
-    prometheus_metric_line(
-        "gateway_request_body_too_large_total",
-        gateway_metrics["request_body_too_large"]
+            prometheus_metric_line(
+            "gateway_request_body_too_large_total",
+            gateway_metrics["request_body_too_large"]
+        )
     )
-)
+    lines.append("# HELP gateway_retry_attempts_total Total downstream retry attempts.")
+    lines.append("# TYPE gateway_retry_attempts_total counter")
+    lines.append(
+        prometheus_metric_line(
+            "gateway_retry_attempts_total",
+            gateway_metrics["retry_attempts"]
+        )
+    )
 
+    lines.append("# HELP gateway_requests_retried_total Total requests that were retried at least once.")
+    lines.append("# TYPE gateway_requests_retried_total counter")
+    lines.append(
+        prometheus_metric_line(
+            "gateway_requests_retried_total",
+            gateway_metrics["requests_retried"]
+        )
+    )
+
+    lines.append("# HELP gateway_circuit_opened_total Total times a service circuit was opened.")
+    lines.append("# TYPE gateway_circuit_opened_total counter")
+    lines.append(
+        prometheus_metric_line(
+            "gateway_circuit_opened_total",
+            gateway_metrics["circuit_opened_total"]
+        )
+    )
+
+    lines.append("# HELP gateway_circuit_rejected_requests_total Total requests rejected because a circuit was open.")
+    lines.append("# TYPE gateway_circuit_rejected_requests_total counter")
+    lines.append(
+        prometheus_metric_line(
+            "gateway_circuit_rejected_requests_total",
+            gateway_metrics["circuit_rejected_requests"]
+        )
+    )
+
+    lines.append("# HELP gateway_circuit_state Current circuit state by service. 0=closed, 1=half_open, 2=open.")
+    lines.append("# TYPE gateway_circuit_state gauge")
+
+    state_values = {
+        "closed": 0,
+        "half_open": 1,
+        "open": 2
+    }
+
+    for service_name, breaker in circuit_breakers.items():
+        lines.append(
+            prometheus_metric_line(
+                "gateway_circuit_state",
+                state_values.get(breaker["state"], -1),
+                service=service_name
+            )
+        )
     # Prometheus text format should end with a newline.
     return "\n".join(lines) + "\n"
 # ============================================================
-# 17. MAIN REQUEST MIDDLEWARE
+# 18. MAIN REQUEST MIDDLEWARE
 # ============================================================
+
+def check_content_length_limit(request: Request):
+    """
+    Check Content-Length before doing expensive gateway work.
+
+    Why this exists:
+    If the client clearly tells us the body is too large through
+    Content-Length, the gateway should reject it immediately before:
+
+    - JWT validation
+    - rate limiting
+    - reading the request body
+    - forwarding to downstream services
+
+    Returns:
+        allowed: bool
+        status_code: int | None
+        response: Response | None
+    """
+
+    content_length = request.headers.get("content-length")
+
+    # Some requests have no body, such as GET /health.
+    # If there is no Content-Length, we allow it for now.
+    if content_length is None:
+        return True, None, None
+
+    try:
+        content_length_value = int(content_length)
+
+    except ValueError:
+        response = gateway_error_response(
+            status_code=400,
+            detail="Content-Length header must be a valid integer.",
+            request_id=request.state.request_id
+        )
+
+        return False, 400, response
+
+    if content_length_value > MAX_REQUEST_BODY_SIZE_BYTES:
+        response = gateway_error_response(
+            status_code=413,
+            detail="Request body is too large.",
+            request_id=request.state.request_id,
+            extra_headers={
+                "X-Max-Request-Body-Size-Bytes": str(MAX_REQUEST_BODY_SIZE_BYTES)
+            }
+        )
+
+        return False, 413, response
+
+    return True, None, None
+
 @app.middleware("http")
 async def auth_rate_limit_and_logging_middleware(request: Request, call_next):
     """
@@ -1034,12 +1359,13 @@ async def auth_rate_limit_and_logging_middleware(request: Request, call_next):
     1. Assign request ID.
     2. Log request start.
     3. Allow OPTIONS preflight.
-    4. Authenticate protected routes.
-    5. Apply rate limiting.
-    6. Forward to endpoint handler.
-    7. Add response headers.
-    8. Record metrics.
-    9. Log request end.
+    4. Reject oversized requests early.
+    5. Authenticate protected routes.
+    6. Apply rate limiting.
+    7. Forward to endpoint handler.
+    8. Add response headers.
+    9. Record metrics.
+    10. Log request end.
     """
 
     request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
@@ -1059,6 +1385,10 @@ async def auth_rate_limit_and_logging_middleware(request: Request, call_next):
         client_ip=client_ip
     )
 
+    # ------------------------------------------------------------
+    # 1. OPTIONS preflight
+    # ------------------------------------------------------------
+    # CORS preflight requests should not require auth or rate-limit logic.
     if request.method == "OPTIONS":
         response = await call_next(request)
         response.headers["X-Request-ID"] = request_id
@@ -1077,12 +1407,53 @@ async def auth_rate_limit_and_logging_middleware(request: Request, call_next):
             method=request.method,
             path=request.url.path,
             service=service_name,
+            client_ip=client_ip,
             status_code=response.status_code,
             duration_seconds=round(duration, 6)
         )
 
         return response
 
+    # ------------------------------------------------------------
+    # 2. Request size protection
+    # ------------------------------------------------------------
+    # Reject huge requests before JWT validation, rate limiting,
+    # or forwarding to a downstream service.
+    body_size_allowed, body_size_status_code, body_size_response = (
+        check_content_length_limit(request)
+    )
+
+    if not body_size_allowed:
+        duration = time.perf_counter() - start_time
+
+        if body_size_status_code == 413:
+            gateway_metrics["request_body_too_large"] += 1
+
+        record_request_metrics(
+            request=request,
+            status_code=body_size_status_code,
+            duration=duration,
+            was_gateway_error=True
+        )
+
+        log_event(
+            "request_body_rejected",
+            level="warning",
+            request_id=request_id,
+            method=request.method,
+            path=request.url.path,
+            service=service_name,
+            client_ip=client_ip,
+            status_code=body_size_status_code,
+            max_size_bytes=MAX_REQUEST_BODY_SIZE_BYTES,
+            duration_seconds=round(duration, 6)
+        )
+
+        return body_size_response
+
+    # ------------------------------------------------------------
+    # 3. Authentication for protected routes
+    # ------------------------------------------------------------
     if not is_public_path(request.method, request.url.path):
         try:
             payload = verify_gateway_token(
@@ -1110,6 +1481,7 @@ async def auth_rate_limit_and_logging_middleware(request: Request, call_next):
                 method=request.method,
                 path=request.url.path,
                 service=service_name,
+                client_ip=client_ip,
                 status_code=error.status_code,
                 detail=error.detail,
                 duration_seconds=round(duration, 6)
@@ -1121,6 +1493,11 @@ async def auth_rate_limit_and_logging_middleware(request: Request, call_next):
                 request_id=request_id
             )
 
+    # ------------------------------------------------------------
+    # 4. Rate limiting
+    # ------------------------------------------------------------
+    # Auth happens before rate limiting so protected routes can be
+    # rate-limited by user ID instead of only IP address.
     allowed, retry_after, rate_limit_rule = check_rate_limit(request)
 
     if not allowed:
@@ -1161,6 +1538,9 @@ async def auth_rate_limit_and_logging_middleware(request: Request, call_next):
             }
         )
 
+    # ------------------------------------------------------------
+    # 5. Continue to the route handler
+    # ------------------------------------------------------------
     response = await call_next(request)
 
     if rate_limit_rule is not None:
@@ -1196,7 +1576,7 @@ async def auth_rate_limit_and_logging_middleware(request: Request, call_next):
     return response
 
 # ============================================================
-# 18. HEALTH CHECKS
+# 19. HEALTH CHECKS
 # ============================================================
 
 async def check_service_health(
@@ -1206,6 +1586,8 @@ async def check_service_health(
 ):
     """
     Check whether one downstream service responds to /health.
+
+    The gateway uses this to report whether each internal service is healthy.
     """
 
     try:
@@ -1228,9 +1610,11 @@ async def health(request: Request):
     """
     Gateway health endpoint.
 
-    Checks:
-    - gateway is running
-    - downstream services are reachable
+    This checks:
+    1. The gateway itself is running.
+    2. Each downstream service responds to /health.
+
+    This endpoint is public and skipped by rate limiting.
     """
 
     client = request.app.state.http_client
@@ -1255,9 +1639,8 @@ async def health(request: Request):
         "services": results
     }
 
-
 # ============================================================
-# 19. METRICS ENDPOINT
+# 20. METRICS ENDPOINT
 # ============================================================
 
 @app.get("/metrics/json")
@@ -1285,7 +1668,12 @@ async def metrics_json_endpoint():
         "rate_limited_requests": gateway_metrics["rate_limited_requests"],
         "auth_failed_requests": gateway_metrics["auth_failed_requests"],
         "gateway_error_requests": gateway_metrics["gateway_error_requests"],
+        "retry_attempts": gateway_metrics["retry_attempts"],
+        "requests_retried": gateway_metrics["requests_retried"],
         "request_body_too_large": gateway_metrics["request_body_too_large"],
+        "circuit_opened_total": gateway_metrics["circuit_opened_total"],
+        "circuit_rejected_requests": gateway_metrics["circuit_rejected_requests"],
+        "circuit_breakers": circuit_breakers,
 
         "average_duration_seconds": round(average_duration_seconds, 6),
         "max_duration_seconds": round(
@@ -1319,7 +1707,7 @@ async def prometheus_metrics_endpoint():
 
 
 # ============================================================
-# 20. TARGET URL BUILDING
+# 21. TARGET URL BUILDING
 # ============================================================
 
 def build_target_url(service_name: str, path: str):
@@ -1351,12 +1739,22 @@ def build_target_url(service_name: str, path: str):
 
 
 # ============================================================
-# 21. REQUEST FORWARDING
+# 22. REQUEST FORWARDING
 # ============================================================
 
 async def forward_request(service_name: str, path: str, request: Request):
     """
     Forward request from gateway to downstream service.
+
+    This function handles:
+    - service lookup
+    - circuit breaker protection
+    - target URL building
+    - safe header forwarding
+    - backup body-size validation
+    - retrying safe methods
+    - downstream timeout/unavailable handling
+    - returning the downstream response
     """
 
     request_id = request.state.request_id
@@ -1378,37 +1776,77 @@ async def forward_request(service_name: str, path: str, request: Request):
             service_name=service_name
         )
 
+    # ------------------------------------------------------------
+    # 1. Circuit breaker fast-fail check
+    # ------------------------------------------------------------
+    circuit_allowed, circuit_retry_after = should_allow_service_request(
+        service_name
+    )
+
+    if not circuit_allowed:
+        gateway_metrics["circuit_rejected_requests"] += 1
+
+        log_event(
+            "circuit_request_rejected",
+            level="warning",
+            request_id=request_id,
+            method=request.method,
+            path=request.url.path,
+            service=service_name,
+            circuit_state=get_circuit_breaker(service_name)["state"],
+            retry_after=circuit_retry_after,
+            status_code=503
+        )
+
+        return gateway_error_response(
+            status_code=503,
+            detail=f"{service_name} service circuit is open",
+            request_id=request_id,
+            service_name=service_name,
+            extra_headers={
+                "Retry-After": str(circuit_retry_after),
+                "X-Circuit-State": "open"
+            }
+        )
+
     target_url = build_target_url(service_name, path)
     headers = build_forward_headers(request)
-    content_length = request.headers.get("content-length")
 
-    if content_length is not None:
-        try:
-            content_length_value = int(content_length)
-        except ValueError:
-            gateway_metrics["gateway_error_requests"] += 1
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "error": "invalid_content_length",
-                    "message": "Content-Length header must be a valid integer."
-                }
-            )
-
-        if content_length_value > MAX_REQUEST_BODY_SIZE_BYTES:
-            gateway_metrics["request_body_too_large"] += 1
-            gateway_metrics["gateway_error_requests"] += 1
-
-            return JSONResponse(
-                status_code=413,
-                content={
-                    "error": "payload_too_large",
-                    "message": "Request body is too large.",
-                    "max_size_bytes": MAX_REQUEST_BODY_SIZE_BYTES
-                }
-            )
-        
+    # ------------------------------------------------------------
+    # 2. Read request body and backup body-size check
+    # ------------------------------------------------------------
+    # The middleware already checks Content-Length early.
+    # This backup check catches cases where:
+    # - Content-Length is missing
+    # - Content-Length is wrong
+    # - the client sends a body anyway
     body = await request.body()
+
+    if len(body) > MAX_REQUEST_BODY_SIZE_BYTES:
+        gateway_metrics["request_body_too_large"] += 1
+
+        log_event(
+            "request_body_rejected_after_read",
+            level="warning",
+            request_id=request_id,
+            method=request.method,
+            path=request.url.path,
+            service=service_name,
+            target_url=target_url,
+            actual_size_bytes=len(body),
+            max_size_bytes=MAX_REQUEST_BODY_SIZE_BYTES,
+            status_code=413
+        )
+
+        return gateway_error_response(
+            status_code=413,
+            detail="Request body is too large.",
+            request_id=request_id,
+            service_name=service_name,
+            extra_headers={
+                "X-Max-Request-Body-Size-Bytes": str(MAX_REQUEST_BODY_SIZE_BYTES)
+            }
+        )
 
     log_event(
         "forward_request",
@@ -1416,21 +1854,110 @@ async def forward_request(service_name: str, path: str, request: Request):
         method=request.method,
         path=request.url.path,
         service=service_name,
-        target_url=target_url
+        target_url=target_url,
+        circuit_state=get_circuit_breaker(service_name)["state"]
     )
 
     try:
         client: httpx.AsyncClient = request.app.state.http_client
 
-        service_response = await client.request(
-            method=request.method,
-            url=target_url,
-            headers=headers,
-            content=body,
-            params=request.query_params
-        )
+        request_was_retried = False
+        service_response = None
+
+        for attempt_number in range(1, RETRY_ATTEMPTS + 1):
+            try:
+                service_response = await client.request(
+                    method=request.method,
+                    url=target_url,
+                    headers=headers,
+                    content=body,
+                    params=request.query_params
+                )
+
+                should_retry_status_code = (
+                    request.method in RETRYABLE_METHODS
+                    and service_response.status_code in RETRYABLE_STATUS_CODES
+                    and attempt_number < RETRY_ATTEMPTS
+                )
+
+                if should_retry_status_code:
+                    request_was_retried = True
+                    gateway_metrics["retry_attempts"] += 1
+
+                    log_event(
+                        "retrying_downstream_response",
+                        level="warning",
+                        request_id=request_id,
+                        method=request.method,
+                        path=request.url.path,
+                        service=service_name,
+                        target_url=target_url,
+                        attempt_number=attempt_number,
+                        next_attempt_number=attempt_number + 1,
+                        status_code=service_response.status_code,
+                        backoff_seconds=RETRY_BACKOFF_SECONDS
+                    )
+
+                    await asyncio.sleep(RETRY_BACKOFF_SECONDS)
+                    continue
+
+                break
+
+            except (httpx.TimeoutException, httpx.RequestError) as error:
+                should_retry_exception = (
+                    request.method in RETRYABLE_METHODS
+                    and attempt_number < RETRY_ATTEMPTS
+                )
+
+                if should_retry_exception:
+                    request_was_retried = True
+                    gateway_metrics["retry_attempts"] += 1
+
+                    log_event(
+                        "retrying_downstream_exception",
+                        level="warning",
+                        request_id=request_id,
+                        method=request.method,
+                        path=request.url.path,
+                        service=service_name,
+                        target_url=target_url,
+                        attempt_number=attempt_number,
+                        next_attempt_number=attempt_number + 1,
+                        error_type=type(error).__name__,
+                        backoff_seconds=RETRY_BACKOFF_SECONDS
+                    )
+
+                    await asyncio.sleep(RETRY_BACKOFF_SECONDS)
+                    continue
+
+                raise
+
+        if request_was_retried:
+            gateway_metrics["requests_retried"] += 1
+
+        if service_response is None:
+            record_service_failure(
+                service_name=service_name,
+                request_id=request_id,
+                reason="no_downstream_response"
+            )
+
+            return gateway_error_response(
+                status_code=503,
+                detail=f"{service_name} service unavailable",
+                request_id=request_id,
+                service_name=service_name
+            )
 
     except httpx.TimeoutException as error:
+        record_service_failure(
+            service_name=service_name,
+            request_id=request_id,
+            reason="timeout",
+            status_code=504,
+            error_type=type(error).__name__
+        )
+
         log_event(
             "service_timeout",
             level="error",
@@ -1451,6 +1978,14 @@ async def forward_request(service_name: str, path: str, request: Request):
         )
 
     except httpx.RequestError as error:
+        record_service_failure(
+            service_name=service_name,
+            request_id=request_id,
+            reason="request_error",
+            status_code=503,
+            error_type=type(error).__name__
+        )
+
         log_event(
             "service_unavailable",
             level="error",
@@ -1470,6 +2005,22 @@ async def forward_request(service_name: str, path: str, request: Request):
             service_name=service_name
         )
 
+    # ------------------------------------------------------------
+    # 3. Record circuit breaker result
+    # ------------------------------------------------------------
+    if service_response.status_code in CIRCUIT_FAILURE_STATUS_CODES:
+        record_service_failure(
+            service_name=service_name,
+            request_id=request_id,
+            reason="bad_downstream_status_code",
+            status_code=service_response.status_code
+        )
+    else:
+        record_service_success(
+            service_name=service_name,
+            request_id=request_id
+        )
+
     log_event(
         "service_response",
         request_id=request_id,
@@ -1477,7 +2028,8 @@ async def forward_request(service_name: str, path: str, request: Request):
         path=request.url.path,
         service=service_name,
         target_url=target_url,
-        status_code=service_response.status_code
+        status_code=service_response.status_code,
+        circuit_state=get_circuit_breaker(service_name)["state"]
     )
 
     return Response(
@@ -1489,9 +2041,8 @@ async def forward_request(service_name: str, path: str, request: Request):
         ),
         media_type=service_response.headers.get("content-type")
     )
-
 # ============================================================
-# 22. CATCH-ALL GATEWAY ROUTES
+# 23. CATCH-ALL GATEWAY ROUTES
 # ============================================================
 
 @app.api_route(

@@ -398,6 +398,47 @@
         "colorMode": "value",
         "graphMode": "area",
         "justifyMode": "auto"
+    
+      }
+    },
+    {
+      "id": 11,
+      "type": "stat",
+      "title": "Payload Too Large Requests",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "gateway_request_body_too_large_total",
+          "legendFormat": "payload too large"
+        }
+      ],
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 24
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": ["lastNotNull"],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
       }
     }
   ]
