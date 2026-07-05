@@ -28,10 +28,13 @@ if SECRET_KEY is None:
 
 ALGORITHM = "HS256"
 
-
 # ============================================================
 # 2. LOGGING CONFIGURATION
 # ============================================================
+
+MAX_REQUEST_BODY_SIZE_BYTES = int(
+    os.getenv("MAX_REQUEST_BODY_SIZE_BYTES", str(1024 * 1024))
+)
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 
@@ -353,6 +356,7 @@ gateway_metrics = {
     "rate_limited_requests": 0,
     "auth_failed_requests": 0,
     "gateway_error_requests": 0,
+    "request_body_too_large": 0,
 
     "requests_by_method": {},
     "requests_by_status_code": {},
@@ -1006,6 +1010,15 @@ def build_prometheus_metrics():
                 rule=rule
             )
         )
+    
+    lines.append("# HELP gateway_request_body_too_large_total Total requests rejected because the body was too large.")
+    lines.append("# TYPE gateway_request_body_too_large_total counter")
+    lines.append(
+    prometheus_metric_line(
+        "gateway_request_body_too_large_total",
+        gateway_metrics["request_body_too_large"]
+    )
+)
 
     # Prometheus text format should end with a newline.
     return "\n".join(lines) + "\n"
@@ -1272,6 +1285,7 @@ async def metrics_json_endpoint():
         "rate_limited_requests": gateway_metrics["rate_limited_requests"],
         "auth_failed_requests": gateway_metrics["auth_failed_requests"],
         "gateway_error_requests": gateway_metrics["gateway_error_requests"],
+        "request_body_too_large": gateway_metrics["request_body_too_large"],
 
         "average_duration_seconds": round(average_duration_seconds, 6),
         "max_duration_seconds": round(
@@ -1366,6 +1380,34 @@ async def forward_request(service_name: str, path: str, request: Request):
 
     target_url = build_target_url(service_name, path)
     headers = build_forward_headers(request)
+    content_length = request.headers.get("content-length")
+
+    if content_length is not None:
+        try:
+            content_length_value = int(content_length)
+        except ValueError:
+            gateway_metrics["gateway_error_requests"] += 1
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "invalid_content_length",
+                    "message": "Content-Length header must be a valid integer."
+                }
+            )
+
+        if content_length_value > MAX_REQUEST_BODY_SIZE_BYTES:
+            gateway_metrics["request_body_too_large"] += 1
+            gateway_metrics["gateway_error_requests"] += 1
+
+            return JSONResponse(
+                status_code=413,
+                content={
+                    "error": "payload_too_large",
+                    "message": "Request body is too large.",
+                    "max_size_bytes": MAX_REQUEST_BODY_SIZE_BYTES
+                }
+            )
+        
     body = await request.body()
 
     log_event(
