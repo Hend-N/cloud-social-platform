@@ -1,0 +1,113 @@
+name: Build and Publish Docker Images
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish-images:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Log in to GitHub Container Registry
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io \
+            -u "${{ github.actor }}" \
+            --password-stdin
+
+      - name: Set image variables
+        run: |
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          REPO_NAME=$(basename "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+
+          echo "IMAGE_PREFIX=ghcr.io/$OWNER/$REPO_NAME" >> $GITHUB_ENV
+          echo "IMAGE_TAG=${{ github.sha }}" >> $GITHUB_ENV
+
+      - name: Build and push frontend image
+        run: |
+          docker build \
+            --build-arg VITE_API_BASE_URL=http://localhost:8080 \
+            -t $IMAGE_PREFIX-frontend:$IMAGE_TAG \
+            -t $IMAGE_PREFIX-frontend:latest \
+            ./frontend
+
+          docker push $IMAGE_PREFIX-frontend:$IMAGE_TAG
+          docker push $IMAGE_PREFIX-frontend:latest
+
+      - name: Build and push gateway image
+        run: |
+          docker build \
+            -t $IMAGE_PREFIX-gateway:$IMAGE_TAG \
+            -t $IMAGE_PREFIX-gateway:latest \
+            ./gateway
+
+          docker push $IMAGE_PREFIX-gateway:$IMAGE_TAG
+          docker push $IMAGE_PREFIX-gateway:latest
+
+      - name: Build and push auth-service image
+        run: |
+          docker build \
+            -t $IMAGE_PREFIX-auth-service:$IMAGE_TAG \
+            -t $IMAGE_PREFIX-auth-service:latest \
+            ./services/auth-service
+
+          docker push $IMAGE_PREFIX-auth-service:$IMAGE_TAG
+          docker push $IMAGE_PREFIX-auth-service:latest
+
+      - name: Build and push user-service image
+        run: |
+          docker build \
+            -t $IMAGE_PREFIX-user-service:$IMAGE_TAG \
+            -t $IMAGE_PREFIX-user-service:latest \
+            ./services/user-service
+
+          docker push $IMAGE_PREFIX-user-service:$IMAGE_TAG
+          docker push $IMAGE_PREFIX-user-service:latest
+
+      - name: Build and push post-service image
+        run: |
+          docker build \
+            -t $IMAGE_PREFIX-post-service:$IMAGE_TAG \
+            -t $IMAGE_PREFIX-post-service:latest \
+            ./services/post-service
+
+          docker push $IMAGE_PREFIX-post-service:$IMAGE_TAG
+          docker push $IMAGE_PREFIX-post-service:latest
+
+      - name: Build and push like-service image
+        run: |
+          docker build \
+            -t $IMAGE_PREFIX-like-service:$IMAGE_TAG \
+            -t $IMAGE_PREFIX-like-service:latest \
+            ./services/like-service
+
+          docker push $IMAGE_PREFIX-like-service:$IMAGE_TAG
+          docker push $IMAGE_PREFIX-like-service:latest
+
+      - name: Build and push comment-service image
+        run: |
+          docker build \
+            -t $IMAGE_PREFIX-comment-service:$IMAGE_TAG \
+            -t $IMAGE_PREFIX-comment-service:latest \
+            ./services/comment-service
+
+          docker push $IMAGE_PREFIX-comment-service:$IMAGE_TAG
+          docker push $IMAGE_PREFIX-comment-service:latest
+
+      - name: Build and push follow-service image
+        run: |
+          docker build \
+            -t $IMAGE_PREFIX-follow-service:$IMAGE_TAG \
+            -t $IMAGE_PREFIX-follow-service:latest \
+            ./services/follow-service
+
+          docker push $IMAGE_PREFIX-follow-service:$IMAGE_TAG
+          docker push $IMAGE_PREFIX-follow-service:latest
