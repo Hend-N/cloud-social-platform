@@ -11,6 +11,7 @@ app = FastAPI()
 load_dotenv()
 
 SECRET_KEY = os.getenv("SECRET_KEY")
+
 if SECRET_KEY is None:
     raise RuntimeError("SECRET_KEY is missing. Add it to your .env file.")
 
@@ -38,7 +39,10 @@ class Profile(Base):
 
     display_name: Mapped[str] = mapped_column(String)
 
-    bio: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    bio: Mapped[str | None] = mapped_column(
+        String(200),
+        nullable=True
+    )
 
 
 class CreateProfileRequest(BaseModel):
@@ -54,9 +58,22 @@ class UpdateProfileRequest(BaseModel):
 
 
 DATABASE_URL = "sqlite:///profiles.db"
+
 engine = create_engine(DATABASE_URL)
+
 SessionLocal = sessionmaker(bind=engine)
+
 Base.metadata.create_all(bind=engine)
+
+
+def serialize_profile(profile: Profile):
+    return {
+        "id": profile.id,
+        "user_id": profile.user_id,
+        "username": profile.username,
+        "display_name": profile.display_name,
+        "bio": profile.bio or "",
+    }
 
 
 def get_current_user_id(
@@ -122,19 +139,14 @@ def create_profile(
             user_id=current_user_id,
             username=profile_request.username,
             display_name=profile_request.display_name,
-            bio=profile_request.bio
+            bio=profile_request.bio or ""
         )
 
         session.add(new_profile)
         session.commit()
         session.refresh(new_profile)
 
-        return {
-            "user_id": new_profile.user_id,
-            "username": new_profile.username,
-            "display_name": new_profile.display_name,
-            "bio": new_profile.bio
-        }
+        return serialize_profile(new_profile)
 
 
 @app.get("/profiles/{username}")
@@ -150,11 +162,7 @@ def get_profile(username: str):
                 detail="profile not found"
             )
 
-        return {
-            "username": existing_profile.username,
-            "display_name": existing_profile.display_name,
-            "bio": existing_profile.bio
-        }
+        return serialize_profile(existing_profile)
 
 
 @app.put("/profiles/me")
@@ -196,11 +204,7 @@ def update_profile(
         session.commit()
         session.refresh(existing_profile)
 
-        return {
-            "username": existing_profile.username,
-            "display_name": existing_profile.display_name,
-            "bio": existing_profile.bio
-        }
+        return serialize_profile(existing_profile)
 
 
 @app.delete("/profiles/me")
