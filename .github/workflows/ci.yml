@@ -46,20 +46,19 @@ jobs:
         run: |
           SECRET_KEY="ci-secret-key-for-github-actions-tests"
 
-          touch .env
+          printf "SECRET_KEY=%s\n" "$SECRET_KEY" > .env
+          printf "REDIS_URL=redis://redis:6379/0\n" >> .env
+          printf "RATE_LIMIT_BACKEND=redis\n" >> .env
+          printf "RATE_LIMIT_KEY_PREFIX=gateway:rate_limit\n" >> .env
 
           for service in auth-service user-service post-service like-service comment-service follow-service; do
-            cat > "services/$service/.env" <<EOF
-          SECRET_KEY=$SECRET_KEY
-          EOF
+            printf "SECRET_KEY=%s\n" "$SECRET_KEY" > "services/$service/.env"
           done
 
-          cat > gateway/.env <<EOF
-          SECRET_KEY=$SECRET_KEY
-          REDIS_URL=redis://redis:6379/0
-          RATE_LIMIT_BACKEND=redis
-          RATE_LIMIT_KEY_PREFIX=gateway:rate_limit
-          EOF
+          printf "SECRET_KEY=%s\n" "$SECRET_KEY" > gateway/.env
+          printf "REDIS_URL=redis://redis:6379/0\n" >> gateway/.env
+          printf "RATE_LIMIT_BACKEND=redis\n" >> gateway/.env
+          printf "RATE_LIMIT_KEY_PREFIX=gateway:rate_limit\n" >> gateway/.env
 
       - name: Validate Docker Compose file
         run: docker compose config
