@@ -1,0 +1,108 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Python syntax check
+        run: |
+          python -m py_compile gateway/main.py
+          python -m py_compile services/auth-service/main.py
+          python -m py_compile services/user-service/main.py
+          python -m py_compile services/post-service/main.py
+          python -m py_compile services/like-service/main.py
+          python -m py_compile services/comment-service/main.py
+          python -m py_compile services/follow-service/main.py
+
+      - name: Create CI env files
+        run: |
+          SECRET_KEY="ci-secret-key-for-github-actions-tests"
+
+          touch .env
+
+          for service in auth-service user-service post-service like-service comment-service follow-service; do
+            cat > "services/$service/.env" <<EOF
+          SECRET_KEY=$SECRET_KEY
+          EOF
+          done
+
+          cat > gateway/.env <<EOF
+          SECRET_KEY=$SECRET_KEY
+          REDIS_URL=redis://redis:6379/0
+          RATE_LIMIT_BACKEND=redis
+          RATE_LIMIT_KEY_PREFIX=gateway:rate_limit
+          EOF
+
+      - name: Validate Docker Compose file
+        run: docker compose config
+
+      - name: Build Docker stack
+        run: docker compose build
+
+      - name: Start Docker stack
+        run: docker compose up -d
+
+      - name: Wait for stack
+        run: |
+          echo "Waiting for gateway and frontend..."
+
+          for i in {1..40}; do
+            if curl -fsS http://localhost:8080/health >/dev/null && curl -fsSI http://localhost:3000 >/dev/null; then
+              echo "Stack is ready."
+              exit 0
+            fi
+
+            echo "Still waiting..."
+            sleep 3
+          done
+
+          echo "Stack did not become ready."
+          docker compose ps
+          docker compose logs --tail=150
+          exit 1
+
+      - name: Clear Redis rate limits
+        run: docker compose exec -T redis redis-cli FLUSHDB
+
+      - name: Run integration tests
+        run: |
+          chmod +x ./test_all_services.sh
+          ./test_all_services.sh
+
+      - name: Show logs on failure
+        if: failure()
+        run: |
+          docker compose ps
+          docker compose logs --tail=200
+
+      - name: Stop Docker stack
+        if: always()
+        run: docker compose down -v
