@@ -19,9 +19,13 @@ COMMENT_URL="$GATEWAY_URL/api/comments"
 PASS="password123"
 RUN_ID=$(date +%s)
 
-USER1="user1_$RUN_ID@test.com"
-USER2="user2_$RUN_ID@test.com"
-USER3="user3_$RUN_ID@test.com"
+USERNAME1="user1_$RUN_ID"
+USERNAME2="user2_$RUN_ID"
+USERNAME3="user3_$RUN_ID"
+
+EMAIL1="user1_$RUN_ID@test.com"
+EMAIL2="user2_$RUN_ID@test.com"
+EMAIL3="user3_$RUN_ID@test.com"
 
 json_get() {
     python3 -c '
@@ -58,31 +62,31 @@ echo
 section "Register users"
 request -X POST "$AUTH_URL/register" \
     -H "Content-Type: application/json" \
-    -d "{\"email\":\"$USER1\",\"password\":\"$PASS\"}"
+    -d "{\"username\":\"$USERNAME1\",\"email\":\"$EMAIL1\",\"password\":\"$PASS\"}"
 echo
 
 request -X POST "$AUTH_URL/register" \
     -H "Content-Type: application/json" \
-    -d "{\"email\":\"$USER2\",\"password\":\"$PASS\"}"
+    -d "{\"username\":\"$USERNAME2\",\"email\":\"$EMAIL2\",\"password\":\"$PASS\"}"
 echo
 
 request -X POST "$AUTH_URL/register" \
     -H "Content-Type: application/json" \
-    -d "{\"email\":\"$USER3\",\"password\":\"$PASS\"}"
+    -d "{\"username\":\"$USERNAME3\",\"email\":\"$EMAIL3\",\"password\":\"$PASS\"}"
 echo
 
 section "Login users"
 TOKEN1=$(request -X POST "$AUTH_URL/login" \
     -H "Content-Type: application/json" \
-    -d "{\"email\":\"$USER1\",\"password\":\"$PASS\"}" | json_get "access_token")
+    -d "{\"identifier\":\"$EMAIL1\",\"password\":\"$PASS\"}" | json_get "access_token")
 
 TOKEN2=$(request -X POST "$AUTH_URL/login" \
     -H "Content-Type: application/json" \
-    -d "{\"email\":\"$USER2\",\"password\":\"$PASS\"}" | json_get "access_token")
+    -d "{\"identifier\":\"$EMAIL2\",\"password\":\"$PASS\"}" | json_get "access_token")
 
 TOKEN3=$(request -X POST "$AUTH_URL/login" \
     -H "Content-Type: application/json" \
-    -d "{\"email\":\"$USER3\",\"password\":\"$PASS\"}" | json_get "access_token")
+    -d "{\"identifier\":\"$EMAIL3\",\"password\":\"$PASS\"}" | json_get "access_token")
 
 echo "Tokens created."
 
