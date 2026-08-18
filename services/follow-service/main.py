@@ -1,12 +1,10 @@
 import os
-from fastapi import FastAPI, HTTPException, Header, Depends
-from pydantic import BaseModel, Field
-from jose import jwt,JWTError
-from sqlalchemy import create_engine
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-from sqlalchemy.orm import sessionmaker
 from dotenv import load_dotenv
-from sqlalchemy import UniqueConstraint
+from fastapi import FastAPI, HTTPException, Header, Depends
+from jose import jwt, JWTError
+from pydantic import BaseModel, Field
+from sqlalchemy import create_engine, UniqueConstraint
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 load_dotenv()
 SECRET_KEY = os.getenv("SECRET_KEY")
@@ -30,9 +28,7 @@ class Follow(Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-
     follower_id: Mapped[int] = mapped_column()
-
     following_id: Mapped[int] = mapped_column()
 
 DATABASE_URL = "sqlite:///follows.db"
@@ -40,7 +36,7 @@ engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(bind=engine)
 Base.metadata.create_all(bind=engine)
 
-def get_current_user_id(authorization: str | None = Header(default = None)):
+def get_current_user_id(authorization: str | None = Header(default=None)):
     if authorization is None:
         raise HTTPException(status_code=401, detail="missing authorization header")
     if not authorization.startswith("Bearer "):
@@ -172,10 +168,35 @@ def get_user_following(user_id: int):
             ]
         }
 
+@app.get("/follows/status/{target_user_id}")
+def check_follow_status(
+    target_user_id: int, 
+    current_user_id: int = Depends(get_current_user_id)
+):
+    with SessionLocal() as session:
+        is_following = session.query(Follow).filter(
+            Follow.follower_id == current_user_id,
+            Follow.following_id == target_user_id
+        ).first() is not None
+        
+        return {"is_following": is_following}
+
+@app.get("/follows/users/{user_id}/stats")
+def get_user_follow_stats(user_id: int):
+    with SessionLocal() as session:
+        followers_count = session.query(Follow).filter(
+            Follow.following_id == user_id
+        ).count()
+        
+        following_count = session.query(Follow).filter(
+            Follow.follower_id == user_id
+        ).count()
+        
+        return {
+            "followers_count": followers_count,
+            "following_count": following_count
+        }
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
-
-# cd ~/projects/cloud-social-platform/services/follow-service
-# source venv/bin/activate
-# uvicorn main:app --reload --port 8005

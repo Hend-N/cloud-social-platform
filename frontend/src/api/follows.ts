@@ -6,7 +6,7 @@ export type FollowResponse = {
 };
 
 export async function followUser(targetUserId: number) {
-  const response = await api.post<FollowResponse>("/api/follows", {
+  const response = await api.post<FollowResponse>("/follows", {
     target_user_id: targetUserId,
   });
 
@@ -15,18 +15,33 @@ export async function followUser(targetUserId: number) {
 
 export async function unfollowUser(targetUserId: number) {
   const response = await api.delete<FollowResponse>(
-    `/api/follows/${targetUserId}`
+    `/follows/${targetUserId}`
   );
 
   return response.data;
 }
 
 export async function getFollowers(userId: number) {
-  const response = await api.get(`/api/follows/users/${userId}/followers`);
+  const response = await api.get(`/follows/users/${userId}/followers`);
   return response.data;
 }
 
 export async function getFollowing(userId: number) {
-  const response = await api.get(`/api/follows/users/${userId}/following`);
+  const response = await api.get(`/follows/users/${userId}/following`);
+  return response.data;
+}
+
+export async function checkFollowStatus(targetUserId: number) {
+  const response = await api.get(`/follows/status/${targetUserId}`);
+  return response.data; 
+}
+
+export interface FollowStats {
+  followers_count: number;
+  following_count: number;
+}
+
+export async function getFollowStats(userId: number): Promise<FollowStats> {
+  const response = await api.get(`/follows/users/${userId}/stats`);
   return response.data;
 }

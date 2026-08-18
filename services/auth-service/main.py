@@ -1,26 +1,24 @@
 import os
-from fastapi import FastAPI
-from pydantic import BaseModel, EmailStr, Field
-from passlib.context import CryptContext
-from jose import jwt, JWTError
 from datetime import datetime, timedelta, UTC
-from fastapi import Header, HTTPException, Depends
-from sqlalchemy import create_engine
-from sqlalchemy.orm import DeclarativeBase
-from sqlalchemy import String
-from sqlalchemy.orm import Mapped, mapped_column
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy import select
 from dotenv import load_dotenv
+from fastapi import FastAPI, Header, HTTPException, Depends
+from jose import jwt, JWTError
+from passlib.context import CryptContext
+from pydantic import BaseModel, EmailStr, Field
+from sqlalchemy import create_engine, String, select, or_
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 app = FastAPI()
+
 class RegisterRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=30)
     email: EmailStr
     password: str = Field(min_length=8, max_length=72)
 
 class LoginRequest(BaseModel):
-    email: EmailStr
+    identifier: str
     password: str = Field(min_length=8, max_length=72)
+
 class Base(DeclarativeBase):
     pass
 
@@ -28,15 +26,9 @@ class User(Base):
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-
-    email: Mapped[str] = mapped_column(
-        String,
-        unique=True
-    )
-
-    password_hash: Mapped[str] = mapped_column(
-        String
-    )
+    username: Mapped[str] = mapped_column(String, unique=True, index=True)
+    email: Mapped[str] = mapped_column(String, unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(String)
 
 load_dotenv()
 SECRET_KEY = os.getenv("SECRET_KEY")
@@ -50,103 +42,80 @@ SessionLocal = sessionmaker(bind=engine)
 Base.metadata.create_all(bind=engine)
 
 password_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-def create_access_token(
-    user_id: int,
-    email: str
-):
-    
-    expire = datetime.now(UTC) + timedelta(minutes=30)
 
+def create_access_token(user_id: int, email: str, username: str):
+    expire = datetime.now(UTC) + timedelta(minutes=30)
     payload = {
         "sub": str(user_id),
         "email": email,
+        "username": username,
         "exp": expire
     }
+    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
-    return jwt.encode(
-        payload,
-        SECRET_KEY,
-        algorithm=ALGORITHM
-    )
+def hash_password(password: str):
+    return password_context.hash(password)
 
-def get_current_user(
-    authorization: str | None = Header(default=None)
-):
+def verify_password(password: str, hashed_password: str):
+    return password_context.verify(password, hashed_password)
+
+def verify_token(token: str):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return payload
+    except JWTError:
+        return None
+
+def get_current_user(authorization: str | None = Header(default=None)):
     if authorization is None:
-        raise HTTPException(
-            status_code=401,
-            detail="missing authorization header"
-        )
+        raise HTTPException(status_code=401, detail="missing authorization header")
 
     if not authorization.startswith("Bearer "):
-        raise HTTPException(
-            status_code=401,
-            detail="invalid authorization header"
-        )
+        raise HTTPException(status_code=401, detail="invalid authorization header")
 
     token = authorization.split(" ", 1)[1]
-
     payload = verify_token(token)
 
     if payload is None:
-        raise HTTPException(
-            status_code=401,
-            detail="invalid token"
-        )
+        raise HTTPException(status_code=401, detail="invalid token")
 
     user_id = int(payload["sub"])
-
     session = SessionLocal()
 
     try:
-        user = session.scalar(
-            select(User).where(User.id == user_id)
-        )
-
+        user = session.scalar(select(User).where(User.id == user_id))
         if user is None:
-            raise HTTPException(
-                status_code=401,
-                detail="user no longer exists"
-            )
-
+            raise HTTPException(status_code=401, detail="user no longer exists")
         return user
-
     finally:
         session.close()
 
-def verify_token(token: str):
+@app.get("/health")
+def health():
+    return {"status": "ok"}
 
-    try:
-        payload = jwt.decode(
-            token,
-            SECRET_KEY,
-            algorithms=[ALGORITHM]
-        )
-
-        return payload
-
-    except JWTError:
-        return None
-    
-def hash_password(password: str):
-    return password_context.hash(password)
 
 @app.post("/register")
 def register(request: RegisterRequest):
     with SessionLocal() as session:
         existing_user = session.scalar(
-            select(User).where(User.email == request.email)
+            select(User).where(
+                or_(
+                    User.email == request.email,
+                    User.username == request.username
+                )
+            )
         )
 
         if existing_user:
-            raise HTTPException(
-                status_code=409,
-                detail="user already exists"
-            )
+            if existing_user.email == request.email:
+                raise HTTPException(status_code=409, detail="email already exists")
+            raise HTTPException(status_code=409, detail="username already taken")
 
         hashed_password = hash_password(request.password)
 
         new_user = User(
+            username=request.username,
             email=request.email,
             password_hash=hashed_password
         )
@@ -156,35 +125,26 @@ def register(request: RegisterRequest):
 
         return {"message": "user registered successfully"}
 
-def verify_password(password: str, hashed_password: str):
-    return password_context.verify(password, hashed_password)
-
-@app.get("/health")
-def health():
-    return {"status": "ok"}
 
 @app.post("/login")
 def login(request: LoginRequest):
     with SessionLocal() as session:
         existing_user = session.scalar(
-            select(User).where(User.email == request.email)
+            select(User).where(
+                or_(
+                    User.username == request.identifier,
+                    User.email == request.identifier
+                )
+            )
         )
 
-        if not existing_user:
-            raise HTTPException(
-                status_code=401,
-                detail="invalid credentials"
-            )
-
-        if not verify_password(request.password, existing_user.password_hash):
-            raise HTTPException(
-                status_code=401,
-                detail="invalid credentials"
-            )
+        if not existing_user or not verify_password(request.password, existing_user.password_hash):
+            raise HTTPException(status_code=401, detail="invalid credentials")
 
         token = create_access_token(
             existing_user.id,
-            existing_user.email
+            existing_user.email,
+            existing_user.username
         )
 
         return {
@@ -192,10 +152,12 @@ def login(request: LoginRequest):
             "token_type": "bearer"
         }
 
+
 @app.get("/me")
 def me(current_user: User = Depends(get_current_user)):
     return {
         "id": current_user.id,
+        "username": current_user.username,
         "email": current_user.email
     }
 

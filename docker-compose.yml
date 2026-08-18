@@ -22,6 +22,13 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    environment:
+      AWS_ENDPOINT_URL: http://localstack:4566
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      S3_BUCKET_NAME: cloud-social-platform-media
+      PUBLIC_S3_BASE_URL: http://localhost:4566/cloud-social-platform-media
     healthcheck:
       test:
         [
@@ -203,7 +210,7 @@ services:
         condition: service_healthy
 
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:12.0.2
     restart: unless-stopped
     ports:
       - "3001:3000"
@@ -236,6 +243,7 @@ services:
     volumes:
       - localstack-data:/var/lib/localstack
       - /var/run/docker.sock:/var/run/docker.sock
+      - ./scripts/localstack/init-s3.sh:/etc/localstack/init/ready.d/init-s3.sh
     healthcheck:
       test:
         [

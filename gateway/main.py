@@ -1,3 +1,4 @@
+from importlib.resources import path
 import os
 import time
 import uuid
@@ -214,6 +215,10 @@ SERVICE_MAP = {
         "base_url": os.getenv("COMMENT_SERVICE_URL", "http://comment-service:8000"),
         "prefix": "/comments"
     },
+    "profiles": {
+        "base_url": os.getenv("USER_SERVICE_URL", "http://user-service:8000"),
+        "prefix": "/profiles"
+    }
 }
 
 circuit_breakers = {
@@ -270,13 +275,25 @@ PUBLIC_EXACT_ROUTES = {
     ("GET", "/metrics/json"),
     ("POST", "/api/auth/register"),
     ("POST", "/api/auth/login"),
-    ("GET", "/api/posts"),
+    ("GET", "/api/posts")
 }
 
 PUBLIC_PATTERN_ROUTES = [
     {
         "method": "GET",
+        "pattern": ["api", "profiles", "{str}"]
+    },
+    {
+        "method": "GET",
+        "pattern": ["api", "profiles", "user", "{int}"]
+    },
+    {
+        "method": "GET",
         "pattern": ["api", "users", "{str}"]
+    },
+    {
+        "method": "GET",
+        "pattern": ["api", "users", "user", "{int}"]
     },
     {
         "method": "GET",
@@ -294,6 +311,14 @@ PUBLIC_PATTERN_ROUTES = [
         "method": "GET",
         "pattern": ["api", "follows", "users", "{int}", "following"]
     },
+    {
+        "method": "GET",
+        "pattern": ["api", "follows", "status", "{int}"]
+    },
+    {
+        "method": "POST",
+        "pattern": ["api", "comments"]
+    }
 ]
 
 
@@ -1906,8 +1931,16 @@ def build_target_url(service_name: str, path: str):
     Convert external gateway path into internal service URL.
 
     Example:
-        /api/posts/me
-        -> http://post-service:8000/posts/me
+
+    External:
+        /api/users/profiles/me/avatar
+
+    Gateway:
+        service = users
+        public path = profiles/me/avatar
+
+    Internal:
+        http://user-service:8000/profiles/me/avatar
     """
 
     service = SERVICE_MAP[service_name]
@@ -1916,6 +1949,24 @@ def build_target_url(service_name: str, path: str):
     prefix = service["prefix"]
 
     path = path.strip("/")
+
+    # Remove duplicated internal prefix from incoming path
+    # Example:
+    # path = profiles/me/avatar
+    # prefix = /profiles
+    #
+    # becomes:
+    # me/avatar
+    prefix_without_slash = prefix.strip("/")
+
+    if prefix_without_slash:
+        if path.startswith(prefix_without_slash + "/"):
+            path = path[len(prefix_without_slash) + 1:]
+
+        elif path == prefix_without_slash:
+            path = ""
+
+    # rebuild internal service URL
 
     if prefix == "":
         if path == "":
@@ -1932,6 +1983,46 @@ def build_target_url(service_name: str, path: str):
 # ============================================================
 # 22. REQUEST FORWARDING
 # ============================================================
+
+import json
+
+
+async def get_user_profile(request: Request, user_id: int):
+    client: httpx.AsyncClient = request.app.state.http_client
+
+    response = await client.get(
+        f"http://user-service:8000/profiles/user/{user_id}"
+    )
+
+    if response.status_code != 200:
+        return None
+
+    return response.json()
+
+
+async def enrich_posts(request: Request, posts: list):
+    profile_cache = {}
+
+    for post in posts:
+        user_id = post.get("user_id")
+
+        if user_id is None:
+            continue
+
+        if user_id not in profile_cache:
+            profile_cache[user_id] = await get_user_profile(
+                request,
+                user_id,
+            )
+
+        profile = profile_cache[user_id]
+
+        if profile:
+            post["username"] = profile["username"]
+            post["display_name"] = profile["display_name"]
+            post["avatar_url"] = profile["avatar_url"]
+
+    return posts
 
 async def forward_request(service_name: str, path: str, request: Request):
     """
@@ -2223,15 +2314,33 @@ async def forward_request(service_name: str, path: str, request: Request):
         circuit_state=get_circuit_breaker(service_name)["state"]
     )
 
+    response_content = service_response.content
+
+    if (
+        service_name == "posts"
+        and request.method == "GET"
+        and path == ""
+        and service_response.status_code == 200
+    ):
+        posts = service_response.json()
+
+        posts = await enrich_posts(
+            request,
+            posts,
+        )
+
+        response_content = json.dumps(posts).encode()
+
     return Response(
-        content=service_response.content,
+        content=response_content,
         status_code=service_response.status_code,
         headers=build_response_headers(
             service_response,
-            request_id
+            request_id,
         ),
-        media_type=service_response.headers.get("content-type")
+        media_type=service_response.headers.get("content-type"),
     )
+    
 # ============================================================
 # 23. CATCH-ALL GATEWAY ROUTES
 # ============================================================

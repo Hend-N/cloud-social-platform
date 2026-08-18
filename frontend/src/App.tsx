@@ -1,49 +1,40 @@
-import { BrowserRouter, Link, Route, Routes, useNavigate } from "react-router-dom";
+import { Routes, Route, Navigate } from "react-router-dom";
+import { AppLayout } from "./components/layout/AppLayout";
+import { ProtectedRoute } from "./auth/ProtectedRoute";
+
 import { LoginPage } from "./pages/LoginPage";
 import { RegisterPage } from "./pages/RegisterPage";
 import { FeedPage } from "./pages/FeedPage";
 import { MyProfilePage } from "./pages/MyProfilePage";
 import { PublicProfilePage } from "./pages/PublicProfilePage";
+import { UserProfilePage } from "./pages/UserProfilePage";
 
-function Navigation() {
-  const navigate = useNavigate();
-
-  function handleLogout() {
-    localStorage.removeItem("access_token");
-    navigate("/login");
-  }
-
+export default function App() {
   return (
-    <nav style={{ marginBottom: "24px" }}>
-      <Link to="/login">Login</Link>{" | "}
-      <Link to="/register">Register</Link>{" | "}
-      <Link to="/feed">Feed</Link>{" | "}
-      <Link to="/profile/me">My Profile</Link>{" | "}
-<Link to="/profiles">Find Profile</Link>{" | "}
-      <button onClick={handleLogout}>Logout</button>
-    </nav>
-  );
-}
-
-function App() {
-  return (
-    <BrowserRouter>
-      <main style={{ padding: "40px", color: "white" }}>
-        <h1>Cloud Social Platform</h1>
-
-        <Navigation />
-
-        <Routes>
-          <Route path="/" element={<LoginPage />} />
-          <Route path="/login" element={<LoginPage />} />
-          <Route path="/register" element={<RegisterPage />} />
-          <Route path="/feed" element={<FeedPage />} />
-          <Route path="/profile/me" element={<MyProfilePage />} />
-          <Route path="/profiles" element={<PublicProfilePage />} />
+    <AppLayout>
+      <Routes>
+        <Route path="/" element={<Navigate to="/feed" replace />} />
+        <Route path="/login" element={<LoginPage />} />
+        <Route path="/register" element={<RegisterPage />} />
+        <Route path="/feed" element={<FeedPage />} />
+        <Route path="/profiles" element={<PublicProfilePage />} />
+        <Route
+          path="/profile/me"
+          element={
+            <ProtectedRoute>
+              <MyProfilePage />
+            </ProtectedRoute>
+          }
+        />
+        <Route path="*" element={<Navigate to="/feed" replace />} />
         </Routes>
-      </main>
-    </BrowserRouter>
+        <Routes>
+        {/* Current user profile */}
+        <Route path="/profile" element={<MyProfilePage />} />
+        
+        {/* Any user profile via username search */}
+        <Route path="/profile/:username" element={<UserProfilePage />} />
+      </Routes>
+    </AppLayout>
   );
 }
-
-export default App;

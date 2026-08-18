@@ -1,17 +1,17 @@
 import { api } from "./client";
 
-export type Comment = {
+export interface Comment {
   id?: number;
   comment_id?: number;
+  post_id?: number;
   user_id?: number;
-  post_id: number;
-  comment: string;
+  content: string;
   created_at?: string;
-};
+}
 
 export async function getCommentsForPost(postId: number) {
   const response = await api.get<Comment[] | { comments: Comment[] }>(
-    `/api/comments/post/${postId}`
+    `/comments/post/${postId}`
   );
 
   if (Array.isArray(response.data)) {
@@ -26,7 +26,7 @@ export async function getCommentsForPost(postId: number) {
 }
 
 export async function createComment(postId: number, comment: string) {
-  const response = await api.post<Comment>("/api/comments", {
+  const response = await api.post<Comment>("/comments", {
     post_id: postId,
     comment,
   });
