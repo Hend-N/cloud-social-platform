@@ -10,6 +10,11 @@ jobs:
   build-and-test:
     runs-on: ubuntu-latest
 
+    env:
+      LOCALSTACK_AUTH_TOKEN: ${{ secrets.LOCALSTACK_AUTH_TOKEN }}
+      GRAFANA_ADMIN_USER: ${{ secrets.GRAFANA_ADMIN_USER }}
+      GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -47,9 +52,22 @@ jobs:
           SECRET_KEY="ci-secret-key-for-github-actions-tests"
 
           printf "SECRET_KEY=%s\n" "$SECRET_KEY" > .env
+
+          printf "GRAFANA_ADMIN_USER=%s\n" "$GRAFANA_ADMIN_USER" >> .env
+          printf "GRAFANA_ADMIN_PASSWORD=%s\n" "$GRAFANA_ADMIN_PASSWORD" >> .env
+
           printf "REDIS_URL=redis://redis:6379/0\n" >> .env
           printf "RATE_LIMIT_BACKEND=redis\n" >> .env
           printf "RATE_LIMIT_KEY_PREFIX=gateway:rate_limit\n" >> .env
+
+          printf "AWS_ENDPOINT_URL=http://localstack:4566\n" >> .env
+          printf "AWS_REGION=us-east-1\n" >> .env
+          printf "AWS_ACCESS_KEY_ID=test\n" >> .env
+          printf "AWS_SECRET_ACCESS_KEY=test\n" >> .env
+          printf "S3_BUCKET_NAME=cloud-social-platform-media\n" >> .env
+          printf "PUBLIC_S3_BASE_URL=http://localhost:4566/cloud-social-platform-media\n" >> .env
+
+          printf "LOCALSTACK_AUTH_TOKEN=%s\n" "$LOCALSTACK_AUTH_TOKEN" >> .env
 
           for service in auth-service user-service post-service like-service comment-service follow-service; do
             printf "SECRET_KEY=%s\n" "$SECRET_KEY" > "services/$service/.env"
@@ -60,48 +78,48 @@ jobs:
           printf "RATE_LIMIT_BACKEND=redis\n" >> gateway/.env
           printf "RATE_LIMIT_KEY_PREFIX=gateway:rate_limit\n" >> gateway/.env
 
-      - name: Validate Docker Compose file
-        run: docker compose config
+            - name: Validate Docker Compose file
+              run: docker compose config
 
-      - name: Build Docker stack
-        run: docker compose build
+            - name: Build Docker stack
+              run: docker compose build
 
-      - name: Start Docker stack
-        run: docker compose up -d
+            - name: Start Docker stack
+              run: docker compose up -d
 
-      - name: Wait for stack
-        run: |
-          echo "Waiting for gateway and frontend..."
+            - name: Wait for stack
+              run: |
+                echo "Waiting for gateway and frontend..."
 
-          for i in {1..40}; do
-            if curl -fsS http://localhost:8080/health >/dev/null && curl -fsSI http://localhost:3000 >/dev/null; then
-              echo "Stack is ready."
-              exit 0
-            fi
+                for i in {1..40}; do
+                  if curl -fsS http://localhost:8080/health >/dev/null && curl -fsSI http://localhost:3000 >/dev/null; then
+                    echo "Stack is ready."
+                    exit 0
+                  fi
 
-            echo "Still waiting..."
-            sleep 3
-          done
+                  echo "Still waiting..."
+                  sleep 3
+                done
 
-          echo "Stack did not become ready."
-          docker compose ps
-          docker compose logs --tail=150
-          exit 1
+                echo "Stack did not become ready."
+                docker compose ps
+                docker compose logs --tail=150
+                exit 1
 
-      - name: Clear Redis rate limits
-        run: docker compose exec -T redis redis-cli FLUSHDB
+            - name: Clear Redis rate limits
+              run: docker compose exec -T redis redis-cli FLUSHDB
 
-      - name: Run integration tests
-        run: |
-          chmod +x ./test_all_services.sh
-          ./test_all_services.sh
+            - name: Run integration tests
+              run: |
+                chmod +x ./test_all_services.sh
+                ./test_all_services.sh
 
-      - name: Show logs on failure
-        if: failure()
-        run: |
-          docker compose ps
-          docker compose logs --tail=200
+            - name: Show logs on failure
+              if: failure()
+              run: |
+                docker compose ps
+                docker compose logs --tail=200
 
-      - name: Stop Docker stack
-        if: always()
-        run: docker compose down -v
+            - name: Stop Docker stack
+              if: always()
+              run: docker compose down -v
