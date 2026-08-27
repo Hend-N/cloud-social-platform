@@ -5,11 +5,13 @@ import {
   getMyProfile,
   updateMyProfile,
   uploadMyAvatar,
-  getFollowStats,
 } from "../api/users";
-import type { Profile, FollowStats } from "../api/users";
+import type { Profile } from "../api/users";
+import { getFollowStats } from "../api/follows";
+import type { FollowStats } from "../api/follows";
 import { getUserPosts, deletePost } from "../api/posts";
 import type { Post } from "../api/posts";
+
 import { isLoggedIn } from "../auth/token";
 import "./MyProfilePage.css";
 
@@ -46,15 +48,24 @@ export function MyProfilePage() {
           setBio(data.bio || "");
 
           if (data.username) {
-            try {
-              const followStats = await getFollowStats(data.username);
-              setStats(followStats);
-            } catch {
-              setStats({ followers_count: 0, following_count: 0 });
+            if (data.user_id) {
+              try {
+                const followStats =
+                  await getFollowStats(data.user_id);
+
+                setStats(followStats);
+              } catch {
+                setStats({
+                  followers_count: 0,
+                  following_count: 0,
+                });
+              }
             }
 
             try {
-              const userPosts = await getUserPosts(data.username);
+              const userPosts =
+                await getUserPosts(data.username);
+
               setPosts(userPosts);
             } catch {
               setPosts([]);

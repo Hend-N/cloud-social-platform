@@ -8,7 +8,7 @@ export type RegisterData = {
 };
 
 export type LoginCredentials = {
-  identifier: string; 
+  identifier: string;
   password: string;
 };
 
@@ -18,42 +18,33 @@ export interface RegisterParams {
   password: string;
 }
 
-export async function register(data: RegisterParams): Promise<void> {
-  const res = await fetch("/auth/register", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(data),
-  });
-
-  if (!res.ok) {
-    const errorData = await res.json().catch(() => ({}));
-    let message = "";
-
-    if (typeof errorData.detail === "string") {
-      message = errorData.detail;
-    } else if (Array.isArray(errorData.detail) && errorData.detail[0]?.msg) {
-      message = errorData.detail[0].msg;
-    } else if (typeof errorData.message === "string") {
-      message = errorData.message;
-    } else if (typeof errorData.error === "string") {
-      message = errorData.error;
-    }
-
-    throw new Error(message || `Registration failed (HTTP ${res.status}).`);
-  }
+export async function register(
+  data: RegisterParams
+): Promise<void> {
+  await api.post("/auth/register", data);
 }
 
-export async function login(credentials: LoginCredentials) {
+export async function login(
+  credentials: LoginCredentials
+) {
   const response = await api.post("/auth/login", {
     identifier: credentials.identifier,
     password: credentials.password,
   });
 
   const token = response.data.access_token;
-  if (token) {
-    setToken(token);
+
+  if (!token) {
+    throw new Error("Login succeeded but no access token was returned.");
   }
+
+  setToken(token);
 
   return response.data;
 }
 
+export async function getMe() {
+  const response = await api.get("/auth/me");
+
+  return response.data;
+}

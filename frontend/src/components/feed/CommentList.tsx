@@ -51,7 +51,7 @@ export function CommentList({ comments, loggedIn, onAddComment }: CommentListPro
       ) : (
         <div style={{ display: "grid", gap: "8px", marginBottom: "12px" }}>
           {comments.map((comment, index) => {
-            const commentId = comment.comment_id || comment.id || index;
+            const commentId = comment.id || comment.id || index;
             const isReplying = replyingToId === commentId;
 
             return (
@@ -64,7 +64,7 @@ export function CommentList({ comments, loggedIn, onAddComment }: CommentListPro
                   background: "rgba(0,0,0,0.2)",
                 }}
               >
-                <p style={{ margin: "0 0 4px 0", fontSize: "0.9rem" }}>{comment.content}</p>
+                <p style={{ margin: "0 0 4px 0", fontSize: "0.9rem" }}>{comment.comment}</p>
                 
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <small style={{ color: "var(--color-muted, #94a3b8)" }}>

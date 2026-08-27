@@ -1,13 +1,16 @@
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
-import { getPublicProfile, getFollowStats } from "../api/users";
-import type { Profile, FollowStats } from "../api/users";
 import { getPostsByUser } from "../api/posts";
 import type { Post } from "../api/posts";
 import { getLikeCount, likePost, unlikePost } from "../api/likes";
 import { createComment, getCommentsForPost } from "../api/comments";
 import type { Comment } from "../api/comments";
 import { isLoggedIn } from "../auth/token";
+import { getPublicProfile } from "../api/users";
+import type { Profile } from "../api/users";
+
+import { getFollowStats } from "../api/follows";
+import type { FollowStats } from "../api/follows";
 
 import { PostCard } from "../components/feed/PostCard";
 import { LoadingSpinner } from "../components/ui/LoadingSpinner";
@@ -45,8 +48,10 @@ useEffect(() => {
         const userData = await getPublicProfile(targetUsername);
         setProfile(userData);
 
-        const userStats = await getFollowStats(targetUsername);
-        setStats(userStats);
+        if (userData.user_id) {
+          const userStats = await getFollowStats(userData.user_id);
+          setStats(userStats);
+}
 
         // Fetch User's Specific Posts
         const userPosts = await getPostsByUser(targetUsername);

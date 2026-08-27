@@ -13,11 +13,22 @@ export default function App() {
   return (
     <AppLayout>
       <Routes>
+        {/* Core Pages */}
         <Route path="/" element={<Navigate to="/feed" replace />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
         <Route path="/feed" element={<FeedPage />} />
         <Route path="/profiles" element={<PublicProfilePage />} />
+
+        {/* Profile Routes */}
+        <Route
+          path="/profile"
+          element={
+            <ProtectedRoute>
+              <MyProfilePage />
+            </ProtectedRoute>
+          }
+        />
         <Route
           path="/profile/me"
           element={
@@ -26,14 +37,10 @@ export default function App() {
             </ProtectedRoute>
           }
         />
-        <Route path="*" element={<Navigate to="/feed" replace />} />
-        </Routes>
-        <Routes>
-        {/* Current user profile */}
-        <Route path="/profile" element={<MyProfilePage />} />
-        
-        {/* Any user profile via username search */}
         <Route path="/profile/:username" element={<UserProfilePage />} />
+
+        {/* Wildcard Fallback */}
+        <Route path="*" element={<Navigate to="/feed" replace />} />
       </Routes>
     </AppLayout>
   );

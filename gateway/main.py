@@ -254,71 +254,84 @@ BLOCKED_REQUEST_HEADERS = HOP_BY_HOP_HEADERS | {
 
 BLOCKED_RESPONSE_HEADERS = HOP_BY_HOP_HEADERS | {
     "content-length",
+    "date",
+    "server",
 }
 
 
 # ============================================================
 # 7. PUBLIC ROUTE CONFIGURATION
 # ============================================================
-# We use two styles:
-#
-# 1. Exact routes:
-#    Used when the path must match exactly.
-#
-# 2. Pattern routes:
-#    Used when the path has parameters.
-#
-
 PUBLIC_EXACT_ROUTES = {
     ("GET", "/health"),
     ("GET", "/metrics"),
     ("GET", "/metrics/json"),
     ("POST", "/api/auth/register"),
     ("POST", "/api/auth/login"),
-    ("GET", "/api/posts")
+    ("GET", "/api/posts"),
 }
 
 PUBLIC_PATTERN_ROUTES = [
     {
         "method": "GET",
-        "pattern": ["api", "profiles", "{str}"]
+        "pattern": ["api", "profiles", "{str}"],
     },
     {
         "method": "GET",
-        "pattern": ["api", "profiles", "user", "{int}"]
+        "pattern": ["api", "profiles", "user", "{int}"],
     },
     {
         "method": "GET",
-        "pattern": ["api", "users", "{str}"]
+        "pattern": ["api", "users", "{str}"],
     },
     {
         "method": "GET",
-        "pattern": ["api", "users", "user", "{int}"]
+        "pattern": ["api", "users", "user", "{int}"],
     },
     {
         "method": "GET",
-        "pattern": ["api", "comments", "post", "{int}"]
+        "pattern": ["api", "comments", "post", "{int}"],
     },
     {
         "method": "GET",
-        "pattern": ["api", "likes", "posts", "{int}", "count"]
+        "pattern": ["api", "likes", "posts", "{int}", "count"],
     },
     {
         "method": "GET",
-        "pattern": ["api", "follows", "users", "{int}", "followers"]
+        "pattern": ["api", "follows", "users", "{int}", "followers"],
     },
     {
         "method": "GET",
-        "pattern": ["api", "follows", "users", "{int}", "following"]
+        "pattern": ["api", "follows", "users", "{int}", "following"],
     },
     {
         "method": "GET",
-        "pattern": ["api", "follows", "status", "{int}"]
+        "pattern": ["api", "follows", "status", "{int}"],
+    },
+]
+
+PROTECTED_EXACT_ROUTES = {
+    ("POST", "/api/posts"),
+    ("POST", "/api/comments"),
+}
+
+PROTECTED_PATTERN_ROUTES = [
+    {
+        "method": "POST",
+        "pattern": ["api", "likes", "posts", "{int}"],
+    },
+    {
+        "method": "DELETE",
+        "pattern": ["api", "likes", "posts", "{int}"],
     },
     {
         "method": "POST",
-        "pattern": ["api", "comments"]
-    }
+        "pattern": ["api", "follows", "users", "{int}"],
+    },
+    {
+        "method": "DELETE",
+        "pattern": ["api", "follows", "users", "{int}"],
+    },
 ]
 
 
@@ -532,50 +545,36 @@ def gateway_error_response(
 # 12. PUBLIC ROUTE CHECKING
 # ============================================================
 
-def public_pattern_route_matches(method: str, path: str, route: dict):
-    """
-    Check one public pattern route.
-
-    Example route:
-        {
-            "method": "GET",
-            "pattern": ["api", "comments", "post", "{int}"]
-        }
-
-    This matches:
-        GET /api/comments/post/1
-
-    It does not match:
-        GET /api/comments/post/me
-        POST /api/comments/post/1
-    """
-
+def pattern_route_matches(method: str, path: str, route: dict):
     return (
         route["method"] == method
         and path_matches_pattern(path, route["pattern"])
     )
 
 
-def is_public_path(method: str, path: str):
+def classify_route(method: str, path: str) -> str:
     """
-    Decide whether a route is public.
+    Classify route as 'public', 'protected', or 'unknown'.
 
-    Public means:
-        The request does not need a JWT.
-
-    This version is data-driven:
-        - exact public routes are stored in PUBLIC_EXACT_ROUTES
-        - parameterized public routes are stored in PUBLIC_PATTERN_ROUTES
+    - public: No authentication required.
+    - protected: Valid JWT required in Authorization header.
+    - unknown: Unrecognized route -> 404 Not Found.
     """
-
+    # 1. Public checks
     if (method, path) in PUBLIC_EXACT_ROUTES:
-        return True
+        return "public"
 
     for route in PUBLIC_PATTERN_ROUTES:
-        if public_pattern_route_matches(method, path, route):
-            return True
+        if pattern_route_matches(method, path, route):
+            return "public"
 
-    return False
+    # 2. Protected checks
+    if (method, path) in PROTECTED_EXACT_ROUTES:
+        return "protected"
+
+    for route in PROTECTED_PATTERN_ROUTES:
+        if pattern_route_matches(method, path, route):
+            return "protected"
 
 
 # ============================================================
@@ -1573,7 +1572,7 @@ async def auth_rate_limit_and_logging_middleware(request: Request, call_next):
     2. Log request start.
     3. Allow OPTIONS preflight.
     4. Reject oversized requests early.
-    5. Authenticate protected routes.
+    5. Route classification & Authentication (Public / Protected / 404 Unknown).
     6. Apply rate limiting.
     7. Forward to endpoint handler.
     8. Add response headers.
@@ -1601,7 +1600,6 @@ async def auth_rate_limit_and_logging_middleware(request: Request, call_next):
     # ------------------------------------------------------------
     # 1. OPTIONS preflight
     # ------------------------------------------------------------
-    # CORS preflight requests should not require auth or rate-limit logic.
     if request.method == "OPTIONS":
         response = await call_next(request)
         response.headers["X-Request-ID"] = request_id
@@ -1630,8 +1628,6 @@ async def auth_rate_limit_and_logging_middleware(request: Request, call_next):
     # ------------------------------------------------------------
     # 2. Request size protection
     # ------------------------------------------------------------
-    # Reject huge requests before JWT validation, rate limiting,
-    # or forwarding to a downstream service.
     body_size_allowed, body_size_status_code, body_size_response = (
         check_content_length_limit(request)
     )
@@ -1665,9 +1661,39 @@ async def auth_rate_limit_and_logging_middleware(request: Request, call_next):
         return body_size_response
 
     # ------------------------------------------------------------
-    # 3. Authentication for protected routes
+    # 3. Route classification & Authentication
     # ------------------------------------------------------------
-    if not is_public_path(request.method, request.url.path):
+    route_type = classify_route(request.method, request.url.path)
+
+    if route_type == "unknown":
+        duration = time.perf_counter() - start_time
+
+        record_request_metrics(
+            request=request,
+            status_code=404,
+            duration=duration,
+            was_gateway_error=True
+        )
+
+        log_event(
+            "route_not_found",
+            level="warning",
+            request_id=request_id,
+            method=request.method,
+            path=request.url.path,
+            service=service_name,
+            client_ip=client_ip,
+            status_code=404,
+            duration_seconds=round(duration, 6)
+        )
+
+        return gateway_error_response(
+            status_code=404,
+            detail="route not found",
+            request_id=request_id
+        )
+
+    if route_type == "protected":
         try:
             payload = verify_gateway_token(
                 request.headers.get("Authorization")
@@ -1709,8 +1735,6 @@ async def auth_rate_limit_and_logging_middleware(request: Request, call_next):
     # ------------------------------------------------------------
     # 4. Rate limiting
     # ------------------------------------------------------------
-    # Auth happens before rate limiting so protected routes can be
-    # rate-limited by user ID instead of only IP address.
     allowed, retry_after, rate_limit_rule = await check_rate_limit(request)
 
     if not allowed:
@@ -1752,7 +1776,7 @@ async def auth_rate_limit_and_logging_middleware(request: Request, call_next):
         )
 
     # ------------------------------------------------------------
-    # 5. Continue to the route handler
+    # 5. Forward to endpoint handler
     # ------------------------------------------------------------
     response = await call_next(request)
 
@@ -1926,37 +1950,59 @@ async def prometheus_metrics_endpoint():
 # 21. TARGET URL BUILDING
 # ============================================================
 
-def build_target_url(service_name: str, path: str):
+def build_target_url(
+    service_name: str,
+    path: str,
+    method: str,
+):
     """
-    Convert external gateway path into internal service URL.
+    Convert an external gateway path into an internal service URL.
 
-    Example:
+    Examples:
 
-    External:
-        /api/users/profiles/me/avatar
+        GET /api/posts
+            -> http://post-service:8000/posts
 
-    Gateway:
-        service = users
-        public path = profiles/me/avatar
+        POST /api/posts
+            -> http://post-service:8000/posts/me
 
-    Internal:
-        http://user-service:8000/profiles/me/avatar
+        GET /api/posts/me
+            -> http://post-service:8000/posts/me
+
+        GET /api/users/profiles/me/avatar
+            -> http://user-service:8000/profiles/me/avatar
     """
 
     service = SERVICE_MAP[service_name]
 
-    base_url = service["base_url"]
-    prefix = service["prefix"]
+    base_url = service["base_url"].rstrip("/")
+    prefix = service["prefix"].rstrip("/")
 
     path = path.strip("/")
 
-    # Remove duplicated internal prefix from incoming path
-    # Example:
-    # path = profiles/me/avatar
-    # prefix = /profiles
+    # ------------------------------------------------------------
+    # Special route translations
+    # ------------------------------------------------------------
+
+    # Public API:
+    #   POST /api/posts
     #
-    # becomes:
-    # me/avatar
+    # Internal service:
+    #   POST /posts/me
+    #
+    # Creating a post belongs to the authenticated user,
+    # so the post service uses its /posts/me endpoint.
+    if (
+        service_name == "posts"
+        and method == "POST"
+        and path == ""
+    ):
+        return f"{base_url}/posts/me"
+
+    # ------------------------------------------------------------
+    # Remove duplicated internal prefix from incoming path
+    # ------------------------------------------------------------
+
     prefix_without_slash = prefix.strip("/")
 
     if prefix_without_slash:
@@ -1966,7 +2012,9 @@ def build_target_url(service_name: str, path: str):
         elif path == prefix_without_slash:
             path = ""
 
-    # rebuild internal service URL
+    # ------------------------------------------------------------
+    # Rebuild internal service URL
+    # ------------------------------------------------------------
 
     if prefix == "":
         if path == "":
@@ -2091,7 +2139,11 @@ async def forward_request(service_name: str, path: str, request: Request):
             }
         )
 
-    target_url = build_target_url(service_name, path)
+    target_url = build_target_url(
+        service_name=service_name,
+        path=path,
+        method=request.method,
+    )
     headers = build_forward_headers(request)
 
     # ------------------------------------------------------------

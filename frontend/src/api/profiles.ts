@@ -28,10 +28,10 @@ export async function uploadAvatar(file: File): Promise<Profile> {
   const formData = new FormData();
   formData.append("avatar", file);
 
-  const response = await api.post<Profile>("/profiles/me/avatar", formData, {
-    headers: {
-      "Content-Type": "multipart/form-data",
-    },
-  });
+  const response = await api.post<Profile>(
+    "/profiles/me/avatar",
+    formData
+  );
+
   return response.data;
 }

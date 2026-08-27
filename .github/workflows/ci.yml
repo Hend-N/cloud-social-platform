@@ -14,6 +14,7 @@ jobs:
       LOCALSTACK_AUTH_TOKEN: ${{ secrets.LOCALSTACK_AUTH_TOKEN }}
       GRAFANA_ADMIN_USER: ${{ secrets.GRAFANA_ADMIN_USER }}
       GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
+      CI_SECRET_KEY: ${{ secrets.CI_SECRET_KEY }}
 
     steps:
       - name: Checkout repository
@@ -49,7 +50,7 @@ jobs:
 
       - name: Create CI env files
         run: |
-          SECRET_KEY="ci-secret-key-for-github-actions-tests"
+          SECRET_KEY="$CI_SECRET_KEY"
 
           printf "SECRET_KEY=%s\n" "$SECRET_KEY" > .env
 

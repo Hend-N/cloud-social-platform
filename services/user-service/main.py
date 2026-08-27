@@ -246,6 +246,7 @@ async def upload_avatar(
     avatar: UploadFile = File(...),
     current_user: dict = Depends(get_current_user_data)
 ):
+
     user_id = current_user["user_id"]
     allowed_content_types = {"image/png", "image/jpeg", "image/webp", "image/gif"}
 

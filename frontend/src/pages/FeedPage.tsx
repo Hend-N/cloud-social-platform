@@ -1,17 +1,35 @@
 import { useEffect, useState } from "react";
+
 import { createPost, getPosts } from "../api/posts";
 import type { Post } from "../api/posts";
-import { getLikeCount, likePost, unlikePost } from "../api/likes";
-import { createComment, getCommentsForPost } from "../api/comments";
+
+import {
+  getLikeCount,
+  likePost,
+  unlikePost,
+} from "../api/likes";
+
+import {
+  createComment,
+  getCommentsForPost,
+} from "../api/comments";
+
 import type { Comment } from "../api/comments";
-import { getPublicProfile } from "../api/users";
+
+import {
+  getPublicProfileByUserId,
+} from "../api/users";
+
 import type { Profile } from "../api/users";
+
 import { getApiErrorMessage } from "../api/errors";
+
 import { isLoggedIn } from "../auth/token";
 
 import { Alert } from "../components/ui/Alert";
 import { LoadingSpinner } from "../components/ui/LoadingSpinner";
 import { EmptyState } from "../components/ui/EmptyState";
+
 import { CreatePostForm } from "../components/feed/CreatePostForm";
 import { PostCard } from "../components/feed/PostCard";
 
@@ -64,22 +82,43 @@ export function FeedPage() {
     return commentsMap;
   }
 
-  async function loadUserProfiles(postsToLoad: Post[]) {
-    const usernamesToFetch = new Set<string>();
+  async function loadUserProfiles(
+    postsToLoad: Post[],
+    commentsMap: Record<number, Comment[]>
+  ) {
+    const userIds = new Set<number>();
 
-    postsToLoad.forEach((p) => {
-      if (p.username) usernamesToFetch.add(p.username.toLowerCase());
+    // Post authors
+    postsToLoad.forEach((post) => {
+      if (post.user_id) {
+        userIds.add(post.user_id);
+      }
+    });
+
+    // Comment authors
+    Object.values(commentsMap).forEach((comments) => {
+      comments.forEach((comment) => {
+        if (comment.user_id) {
+          userIds.add(comment.user_id);
+        }
+      });
     });
 
     const profileMap: Record<number, Profile> = {};
+
     await Promise.all(
-      Array.from(usernamesToFetch).map(async (uname) => {
+      Array.from(userIds).map(async (userId) => {
         try {
-          const profile = await getPublicProfile(uname);
-          if (profile && profile.user_id) {
+          const profile = await getPublicProfileByUserId(userId);
+
+          if (profile?.user_id) {
             profileMap[profile.user_id] = profile;
           }
-        } catch {
+        } catch (error) {
+          console.error(
+            `Failed to load profile for user ${userId}`,
+            error
+          );
         }
       })
     );
@@ -93,13 +132,17 @@ export function FeedPage() {
 
     try {
       const data = await getPosts();
+
       setPosts(data);
+
+      // Like counts can load independently
+      const commentsMap = await loadComments(data);
 
       await Promise.all([
         loadLikeCounts(data),
-        loadComments(data),
-        loadUserProfiles(data),
+        loadUserProfiles(data, commentsMap),
       ]);
+
     } catch (err: unknown) {
       setError(getApiErrorMessage(err, "Failed to load posts."));
     } finally {
@@ -156,6 +199,8 @@ export function FeedPage() {
       setError(getApiErrorMessage(err, "Failed to add comment."));
     }
   }
+
+  
 
   useEffect(() => {
     loadPosts();
