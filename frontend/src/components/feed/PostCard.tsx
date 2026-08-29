@@ -1,9 +1,8 @@
-import { useState } from "react";
-import type { FormEvent } from "react";
-
 import type { Post } from "../../api/posts";
 import type { Comment } from "../../api/comments";
 import type { Profile } from "../../api/users";
+
+import { CommentList } from "./CommentList";
 
 import "./PostCard.css";
 
@@ -16,13 +15,20 @@ interface PostCardProps {
 
   profilesByUserId?: Record<number, Profile>;
 
+  currentUserId?: number;
+
   onLike: (post: Post) => void;
   onUnlike: (post: Post) => void;
 
   onAddComment: (
     post: Post,
-    text: string
-  ) => void;
+    text: string,
+    parentId?: number
+  ) => Promise<void>;
+
+  onDeleteComment?: (
+    commentId: number
+  ) => Promise<void>;
 }
 
 export function PostCard({
@@ -35,16 +41,9 @@ export function PostCard({
   onLike,
   onUnlike,
   onAddComment,
+  onDeleteComment,
+  currentUserId,
 }: PostCardProps) {
-
-  const [commentText, setCommentText] =
-    useState("");
-
-  /*
-   * -------------------------
-   * POST AUTHOR
-   * -------------------------
-   */
 
   const postUserId = post.user_id;
 
@@ -75,32 +74,6 @@ export function PostCard({
 
   const initial =
     authorName.charAt(0).toUpperCase();
-
-  /*
-   * -------------------------
-   * COMMENT SUBMIT
-   * -------------------------
-   */
-
-  function handleCommentSubmit(
-    e: FormEvent
-  ) {
-    e.preventDefault();
-
-    const trimmed =
-      commentText.trim();
-
-    if (!trimmed) {
-      return;
-    }
-
-    onAddComment(
-      post,
-      trimmed
-    );
-
-    setCommentText("");
-  }
 
   return (
     <article className="feed-card">
@@ -159,205 +132,54 @@ export function PostCard({
           POST ACTIONS
           ========================= */}
 
-      <div className="feed-card-actions">
+            <div className="feed-card-actions">
 
-        <span className="likes-counter">
-          Likes: {likeCount}
-        </span>
+            <span className="likes-counter">
+              Likes: {likeCount}
+            </span>
 
-        {loggedIn && (
-          <div className="action-buttons">
+            {loggedIn && (
+              <div className="action-buttons">
 
-            <button
-              type="button"
-              onClick={() => onLike(post)}
-              className="btn btn-like"
-            >
-              Like
-            </button>
+                <button
+                  type="button"
+                  onClick={() => onLike(post)}
+                  className="btn btn-like"
+                >
+                  Like
+                </button>
 
-            <button
-              type="button"
-              onClick={() => onUnlike(post)}
-              className="btn btn-unlike"
-            >
-              Unlike
-            </button>
+                <button
+                  type="button"
+                  onClick={() => onUnlike(post)}
+                  className="btn btn-unlike"
+                >
+                  Unlike
+                </button>
 
-          </div>
-        )}
+              </div>
+            )}
 
       </div>
 
       <hr className="feed-divider" />
 
-      {/* =========================
-          COMMENTS
-          ========================= */}
-
-      <div className="feed-comments-section">
-
-        <h4 className="comments-title">
-          Comments
-        </h4>
-
-        {comments.length > 0 ? (
-
-          <div className="comments-list">
-
-            {comments.map(
-              (comment, index) => {
-
-                /*
-                 * The comments service gives us:
-                 *
-                 * {
-                 *   id: 18,
-                 *   user_id: 1,
-                 *   comment: "nbgfv"
-                 * }
-                 */
-
-                const commenterUserId =
-                  comment.user_id;
-
-                /*
-                 * Find the profile belonging
-                 * to that user_id.
-                 */
-
-                const commenterProfile =
-                  commenterUserId
-                    ? profilesByUserId[
-                        commenterUserId
-                      ]
-                    : undefined;
-
-                const commenterUsername =
-                  commenterProfile?.username;
-
-                const commenterName =
-                  commenterProfile?.display_name ||
-                  commenterUsername ||
-                  "User";
-
-                const commentAvatarUrl =
-                  commenterProfile?.avatar_url;
-
-                const commenterInitial =
-                  commenterName
-                    .charAt(0)
-                    .toUpperCase();
-
-                /*
-                 * IMPORTANT:
-                 *
-                 * Your backend calls this field
-                 * "comment".
-                 */
-
-                const textContent =
-                  comment.comment ||
-                  comment.comment ||
-                  comment.comment ||
-                  "";
-
-                const commentKey =
-                  comment.id ||
-                  comment.id ||
-                  `comment-${index}`;
-
-                return (
-                  <div
-                    key={commentKey}
-                    className="comment-item"
-                  >
-
-                    {/* Avatar */}
-
-                    <div className="comment-avatar-frame">
-
-                      {commentAvatarUrl ? (
-
-                        <img
-                          src={commentAvatarUrl}
-                          alt={commenterName}
-                          className="comment-avatar-img"
-                        />
-
-                      ) : (
-
-                        <div className="comment-avatar-placeholder">
-                          {commenterInitial}
-                        </div>
-
-                      )}
-
-                    </div>
-
-                    {/* Comment */}
-
-                    <div className="comment-bubble">
-
-                      <span className="comment-author-name">
-                        {commenterName}
-                      </span>
-
-                      <p className="comment-text">
-                        {textContent}
-                      </p>
-
-                    </div>
-
-                  </div>
-                );
-              }
-            )}
-
-          </div>
-
-        ) : (
-
-          <p className="no-comments-text">
-            No comments yet.
-          </p>
-
-        )}
-
-        {/* =========================
-            COMMENT FORM
-            ========================= */}
-
-        {loggedIn && (
-
-          <form
-            onSubmit={handleCommentSubmit}
-            className="comment-form"
-          >
-
-            <input
-              type="text"
-              value={commentText}
-              onChange={(e) =>
-                setCommentText(e.target.value)
-              }
-              placeholder="Write a comment..."
-              className="comment-input"
-            />
-
-            <button
-              type="submit"
-              disabled={!commentText.trim()}
-              className="btn btn-comment"
-            >
-              Comment
-            </button>
-
-          </form>
-
-        )}
-
-      </div>
+      <CommentList
+        comments={comments}
+        loggedIn={loggedIn}
+        currentUserId={currentUserId}
+        onAddComment={async (
+          text,
+          parentId
+        ) => {
+          await onAddComment(
+            post,
+            text,
+            parentId
+          );
+        }}
+        onDeleteComment={onDeleteComment}
+      />
 
     </article>
   );

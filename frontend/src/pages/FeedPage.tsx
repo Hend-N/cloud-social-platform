@@ -187,20 +187,40 @@ export function FeedPage() {
     }
   }
 
-  async function handleCreateComment(post: Post, text: string) {
+  async function handleCreateComment(
+    post: Post,
+    text: string,
+    parentCommentId?: number
+  ) {
     const postId = getPostId(post);
-    if (!postId) return;
+
+    if (!postId) {
+      return;
+    }
 
     try {
-      await createComment(postId, text);
-      const updatedComments = await getCommentsForPost(postId);
-      setCommentsByPost((current) => ({ ...current, [postId]: updatedComments }));
+      await createComment(
+        postId,
+        text,
+        parentCommentId
+      );
+
+      const updatedComments =
+        await getCommentsForPost(postId);
+
+      setCommentsByPost((current) => ({
+        ...current,
+        [postId]: updatedComments,
+      }));
     } catch (err: unknown) {
-      setError(getApiErrorMessage(err, "Failed to add comment."));
+      setError(
+        getApiErrorMessage(
+          err,
+          "Failed to add comment."
+        )
+      );
     }
   }
-
-  
 
   useEffect(() => {
     loadPosts();
