@@ -1,10 +1,4 @@
 import type { ReactNode } from "react";
-import "./PageContainer.css";
-
-type PageContainerProps = {
-  children: ReactNode;
-};
-
-export function PageContainer({ children }: PageContainerProps) {
+export function PageContainer({ children }: { children: ReactNode }) {
   return <main className="page-container">{children}</main>;
 }

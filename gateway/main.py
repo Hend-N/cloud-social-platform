@@ -16,6 +16,7 @@ from jose import jwt, JWTError
 from fastapi import FastAPI, Request, Response, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi import BackgroundTasks
 
 # ============================================================
 # 1. ENVIRONMENT / CONFIGURATION
@@ -313,9 +314,11 @@ PUBLIC_PATTERN_ROUTES = [
 PROTECTED_EXACT_ROUTES = {
     ("POST", "/api/posts"),
     ("POST", "/api/comments"),
+    ("GET", "/api/comments/user/me"),
 }
 
 PROTECTED_PATTERN_ROUTES = [
+    # Post likes
     {
         "method": "POST",
         "pattern": ["api", "likes", "posts", "{int}"],
@@ -324,6 +327,24 @@ PROTECTED_PATTERN_ROUTES = [
         "method": "DELETE",
         "pattern": ["api", "likes", "posts", "{int}"],
     },
+
+    # Comment reactions
+    {
+        "method": "POST",
+        "pattern": ["api", "likes", "comments", "{int}"],
+    },
+    {
+        "method": "POST",
+        "pattern": ["api", "likes", "comments", "{int}", "dislike"],
+    },
+    {
+        "method": "DELETE",
+        "pattern": ["api", "likes", "comments", "{int}"],
+    },
+    {
+        "method": "GET",
+        "pattern": ["api", "likes", "comments", "{int}", "reaction"],
+    },
     {
         "method": "POST",
         "pattern": ["api", "follows", "users", "{int}"],
@@ -331,6 +352,14 @@ PROTECTED_PATTERN_ROUTES = [
     {
         "method": "DELETE",
         "pattern": ["api", "follows", "users", "{int}"],
+    },
+    {
+        "method": "PUT",
+        "pattern": ["api", "comments", "{int}"],
+    },
+    {
+        "method": "DELETE",
+        "pattern": ["api", "comments", "{int}"],
     },
 ]
 
@@ -2392,7 +2421,70 @@ async def forward_request(service_name: str, path: str, request: Request):
         ),
         media_type=service_response.headers.get("content-type"),
     )
+
+# ============================================================
+# 22.5 ORCHESTRATION ROUTES
+# ============================================================
+
+async def cleanup_likes_for_comments(request: Request, comment_ids: list[int]):
+    """Background task to cascade deletions to the like-service."""
+    client: httpx.AsyncClient = request.app.state.http_client
+    target_url = build_target_url("likes", "comments", "DELETE")
     
+    headers = {
+        "x-internal-service-secret": os.getenv("INTERNAL_SERVICE_SECRET", "super-secret"),
+        "Content-Type": "application/json"
+    }
+
+    try:
+        await client.request(
+            method="DELETE",
+            url=target_url,
+            headers=headers,
+            json=comment_ids
+        )
+    except Exception as e:
+        log_event(
+            "background_like_cleanup_failed",
+            level="error",
+            error=str(e)
+        )
+
+@app.delete("/api/comments/{comment_id}")
+async def delete_comment_orchestration(
+    comment_id: int,
+    request: Request,
+    background_tasks: BackgroundTasks
+):
+    """
+    Specific route to intercept comment deletions before the catch-all.
+    Reuses the gateway's forward_request for circuit breakers and metrics.
+    """
+    # 1. Forward the request to the comment-service
+    response = await forward_request(
+        service_name="comments",
+        path=str(comment_id),
+        request=request
+    )
+
+    # 2. If deletion succeeded, schedule the background cleanup
+    if response.status_code == 200:
+        try:
+            # Parse the bytes response returned by forward_request
+            data = json.loads(response.body)
+            deleted_ids = data.get("deleted_ids", [])
+            
+            if deleted_ids:
+                background_tasks.add_task(
+                    cleanup_likes_for_comments, 
+                    request, 
+                    deleted_ids
+                )
+        except json.JSONDecodeError:
+            pass
+
+    return response
+
 # ============================================================
 # 23. CATCH-ALL GATEWAY ROUTES
 # ============================================================

@@ -1,18 +1,19 @@
 import type { ReactNode } from "react";
-import "./EmptyState.css";
-
-type EmptyStateProps = {
+export function EmptyState({
+  title,
+  description,
+  action,
+}: {
   title: string;
-  description: string;
+  description?: string;
   action?: ReactNode;
-};
-
-export function EmptyState({ title, description, action }: EmptyStateProps) {
+}) {
   return (
     <div className="empty-state">
+      <div className="empty-mark" />
       <h3>{title}</h3>
-      <p>{description}</p>
-      {action && <div className="empty-state-action">{action}</div>}
+      {description && <p>{description}</p>}
+      {action}
     </div>
   );
 }

@@ -1,70 +1,38 @@
-import { api } from "./client";
-
-export interface Comment {
-  id: number;
-  post_id: number;
-  user_id: number;
-  parent_comment_id: number | null;
-  comment: string;
-
-  username?: string;
-  created_at?: string;
+import api from "./client";
+import type { Comment } from "../types/comment";
+export type { Comment };
+const normalize = (d: any): Comment[] =>
+  Array.isArray(d) ? d : Array.isArray(d?.comments) ? d.comments : [];
+export async function getCommentsForPost(postId: number) {
+  return normalize((await api.get(`/comments/post/${postId}`)).data);
 }
-
-export async function getCommentsForPost(
-  postId: number
-): Promise<Comment[]> {
-  const response = await api.get<
-    Comment[] | { comments: Comment[] }
-  >(`/comments/post/${postId}`);
-
-  if (Array.isArray(response.data)) {
-    return response.data;
+export async function getMyComments() {
+  try {
+    return normalize((await api.get("/comments/user/me")).data);
+  } catch {
+    return [];
   }
-
-  if (Array.isArray(response.data.comments)) {
-    return response.data.comments;
-  }
-
-  return [];
 }
-
 export async function createComment(
   postId: number,
   content: string,
-  parentCommentId?: number
-): Promise<Comment> {
-  const response = await api.post<Comment>(
-    "/comments",
-    {
+  parentCommentId?: number,
+) {
+  return (
+    await api.post<Comment>("/comments", {
       post_id: postId,
       comment: content,
-      parent_comment_id:
-        parentCommentId ?? null,
-    }
-  );
-
-  return response.data;
+      parent_comment_id: parentCommentId ?? null,
+    })
+  ).data;
 }
-
-export async function updateComment(
-  commentId: number,
-  content: string
-): Promise<Comment> {
-  const response = await api.put<Comment>(
-    `/comments/${commentId}`,
-    {
-      comment: content,
-    }
-  );
-
-  return response.data;
+export async function updateComment(id: number, content: string) {
+  return (await api.put<Comment>(`/comments/${id}`, { comment: content })).data;
 }
-
-export async function deleteComment(
-  commentId: number
-): Promise<void> {
-  await api.delete(
-    `/comments/${commentId}`
-  );
+export async function deleteComment(id: number) {
+  await api.delete(`/comments/${id}`);
+}
+// Reserved for a future dedicated replies endpoint. Intentionally no network call.
+export async function getMyReplies(): Promise<Comment[]> {
+  return [];
 }

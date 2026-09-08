@@ -1,0 +1,19 @@
+.create-post-card {
+  margin-bottom: 24px;
+}
+
+.create-post-form {
+  display: grid;
+  gap: 12px;
+}
+
+.create-post-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.create-post-counter {
+  font-size: 0.78rem;
+  color: var(--color-muted-2);
+}

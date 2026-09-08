@@ -1,34 +1,33 @@
-import { api } from "./client";
-
-export interface FollowStats {
-  followers_count: number;
-  following_count: number;
+import api from "./client";
+import type { FollowStats } from "../types/follow";
+export type { FollowStats };
+export const followUser = async (id: number) =>
+  (await api.post(`/follows/${id}`)).data;
+export const unfollowUser = async (id: number) =>
+  (await api.delete(`/follows/${id}`)).data;
+export async function checkFollowStatus(id: number) {
+  try {
+    return (await api.get<{ is_following: boolean }>(`/follows/${id}/status`))
+      .data;
+  } catch {
+    return { is_following: false };
+  }
 }
-
-export async function followUser(userId: number) {
-  const response = await api.post(`/follows/${userId}`);
-  return response.data;
+export async function getFollowStats(id: number): Promise<FollowStats> {
+  try {
+    return (await api.get<FollowStats>(`/follows/${id}/stats`)).data;
+  } catch {
+    try {
+      return (await api.get<FollowStats>(`/follows/user/${id}/stats`)).data;
+    } catch {
+      return { followers_count: 0, following_count: 0 };
+    }
+  }
 }
-
-export async function unfollowUser(userId: number) {
-  const response = await api.delete(`/follows/${userId}`);
-  return response.data;
+// Reserved until follower-list endpoints are added to the follow service.
+export async function getFollowers(_userId: number) {
+  return [] as unknown[];
 }
-
-export async function checkFollowStatus(userId: number) {
-  const response = await api.get<{ is_following: boolean }>(
-    `/follows/${userId}/status`
-  );
-
-  return response.data;
-}
-
-export async function getFollowStats(
-  userId: number
-): Promise<FollowStats> {
-  const response = await api.get<FollowStats>(
-    `/follows/${userId}/stats`
-  );
-
-  return response.data;
+export async function getFollowing(_userId: number) {
+  return [] as unknown[];
 }

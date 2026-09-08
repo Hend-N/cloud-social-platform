@@ -1,16 +1,17 @@
 import type { ReactNode } from "react";
 import { Navbar } from "./Navbar";
+import { Sidebar } from "./Sidebar";
+import { MobileNav } from "./MobileNav";
 import { PageContainer } from "./PageContainer";
-
-type AppLayoutProps = {
-  children: ReactNode;
-};
-
-export function AppLayout({ children }: AppLayoutProps) {
+export function AppLayout({ children }: { children: ReactNode }) {
   return (
     <>
       <Navbar />
-      <PageContainer>{children}</PageContainer>
+      <div className="shell">
+        <Sidebar />
+        <PageContainer>{children}</PageContainer>
+      </div>
+      <MobileNav />
     </>
   );
 }

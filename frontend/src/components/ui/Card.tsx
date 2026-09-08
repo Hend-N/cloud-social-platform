@@ -3,13 +3,16 @@ import "./Card.css";
 
 type CardProps = {
   children: ReactNode;
-  className?: string;
   style?: CSSProperties;
+  className?: string;
+  interactive?: boolean;
 };
 
-export function Card({ children, className = "", style }: CardProps) {
+export function Card({ children, style, className, interactive = false }: CardProps) {
+  const classes = ["card", interactive ? "card-interactive" : "", className].filter(Boolean).join(" ");
+
   return (
-    <div className={`card ${className}`.trim()} style={style}>
+    <div className={classes} style={style}>
       {children}
     </div>
   );

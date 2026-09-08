@@ -1,22 +1,7 @@
-const TOKEN_KEY = "token";
-
-export function getToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY);
-}
-
-export function setToken(token: string): void {
-  localStorage.setItem(TOKEN_KEY, token);
-}
-
-export const saveToken = setToken;
-
-export function removeToken(): void {
-  localStorage.removeItem(TOKEN_KEY);
-}
-
-export const clearToken = removeToken;
-export const logout = removeToken; 
-
-export function isLoggedIn(): boolean {
-  return Boolean(getToken());
-}
+const KEY='token';
+export const getToken=()=>localStorage.getItem(KEY);
+export const setToken=(token:string)=>localStorage.setItem(KEY,token);
+export const removeToken=()=>localStorage.removeItem(KEY);
+export const clearToken=removeToken;
+export const logout=removeToken;
+export const isLoggedIn=()=>Boolean(getToken());

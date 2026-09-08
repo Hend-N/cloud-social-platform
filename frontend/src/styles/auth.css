@@ -1,44 +1,35 @@
-.auth-shell {
-  min-height: calc(100vh - 160px);
-  display: grid;
-  place-items: center;
-  padding: 20px 0;
-}
-
-.auth-card {
-  width: 100%;
+.auth-wrapper {
   max-width: 420px;
+  margin: 56px auto 0;
+  padding: 0 16px;
 }
 
-.form-stack {
+.auth-title {
+  margin-top: 0;
+  margin-bottom: 6px;
+  font-size: 1.5rem;
+}
+
+.auth-subtitle {
+  color: var(--color-muted);
+  margin-top: 0;
+  margin-bottom: 22px;
+  font-size: 0.92rem;
+}
+
+.auth-form {
   display: grid;
   gap: 16px;
-  margin-top: 20px;
 }
 
-.form-field {
-  display: grid;
-  gap: 6px;
-}
-
-.form-field label {
-  color: var(--color-muted);
-  font-size: 0.875rem;
-  font-weight: 500;
+.auth-submit {
+  margin-top: 6px;
+  width: 100%;
 }
 
 .auth-footer {
-  margin-top: 20px;
+  margin-top: 22px;
+  font-size: 0.875rem;
   text-align: center;
-  font-size: 0.9rem;
   color: var(--color-muted);
-}
-
-.auth-footer a {
-  color: var(--color-primary);
-  font-weight: 600;
-}
-
-.auth-footer a:hover {
-  text-decoration: underline;
 }

@@ -1,288 +1,143 @@
-import { useState, useEffect } from "react";
-import type { FormEvent } from "react";
-import { Alert } from "../components/ui/Alert";
-import {
-  getMyProfile,
-  updateMyProfile,
-  uploadMyAvatar,
-} from "../api/users";
-import type { Profile } from "../api/users";
+import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
+import { getMyProfile, getPublicProfileByUserId } from "../api/users";
+import type { Profile } from "../types/user";
 import { getFollowStats } from "../api/follows";
-import type { FollowStats } from "../api/follows";
-import { getUserPosts, deletePost } from "../api/posts";
-import type { Post } from "../api/posts";
-
-import { isLoggedIn } from "../auth/token";
-import "./MyProfilePage.css";
-
+import { getUserPosts, getPosts } from "../api/posts";
+import type { Post } from "../types/post";
+import { getLikeCount, getMyLikedPostIds } from "../api/likes";
+import {
+  getMyComments,
+  getCommentsForPost,
+  createComment,
+} from "../api/comments";
+import type { Comment } from "../types/comment";
+import { ProfileHeader } from "../components/profile/ProfileHeader";
+import { ProfileTabs } from "../components/profile/ProfileTabs";
+import { ProfilePosts } from "../components/profile/ProfilePosts";
+import { ProfileLikes } from "../components/profile/ProfileLikes";
+import { ProfileComments } from "../components/profile/ProfileComments";
+import { ProfileReplies } from "../components/profile/ProfileReplies";
+import { EditProfile } from "../components/profile/EditProfile";
+import { Modal } from "../components/ui/Modal";
+import { Spinner } from "../components/ui/Spinner";
+import { ErrorMessage } from "../components/ui/ErrorMessage";
 export function MyProfilePage() {
-  const loggedIn = isLoggedIn();
-
-  const [profile, setProfile] = useState<Profile | null>(null);
-  const [username, setUsername] = useState("");
-  const [displayName, setDisplayName] = useState("");
-  const [bio, setBio] = useState("");
-  const [stats, setStats] = useState<FollowStats>({
-    followers_count: 0,
-    following_count: 0,
-  });
-
-  const [posts, setPosts] = useState<Post[]>([]);
-  const [deletingPostId, setDeletingPostId] = useState<number | null>(null);
-
-  const [avatarFile, setAvatarFile] = useState<File | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [statusMessage, setStatusMessage] = useState("");
-  const [error, setError] = useState("");
-
+  const [params] = useSearchParams(),
+    tab = params.get("tab") || "posts";
+  const [profile, setProfile] = useState<Profile | null>(null),
+    [stats, setStats] = useState({ followers_count: 0, following_count: 0 }),
+    [posts, setPosts] = useState<Post[]>([]),
+    [allPosts, setAllPosts] = useState<Post[]>([]),
+    [likes, setLikes] = useState<Record<number, number>>({}),
+    [comments, setComments] = useState<Record<number, Comment[]>>({}),
+    [activity, setActivity] = useState<Comment[]>([]),
+    [likedIds, setLikedIds] = useState<number[]>([]),
+    [edit, setEdit] = useState(false),
+    [loading, setLoading] = useState(true),
+    [error, setError] = useState("");
   useEffect(() => {
-    if (!loggedIn) return;
-
-    async function loadData() {
+    (async () => {
       try {
-        const data = await getMyProfile();
-        if (data) {
-          setProfile(data);
-          setUsername(data.username || "");
-          setDisplayName(data.display_name || "");
-          setBio(data.bio || "");
-
-          if (data.username) {
-            if (data.user_id) {
-              try {
-                const followStats =
-                  await getFollowStats(data.user_id);
-
-                setStats(followStats);
-              } catch {
-                setStats({
-                  followers_count: 0,
-                  following_count: 0,
-                });
-              }
-            }
-
-            try {
-              const userPosts =
-                await getUserPosts(data.username);
-
-              setPosts(userPosts);
-            } catch {
-              setPosts([]);
-            }
-          }
+        const p = await getMyProfile();
+        setProfile(p);
+        const uid = p.user_id ?? p.id;
+        if (uid) {
+          setStats(await getFollowStats(uid));
+          const ps = await getUserPosts(p.username || "", uid);
+          setPosts(ps);
+          setAllPosts(await getPosts());
+          const l: Record<number, number> = {},
+            c: Record<number, Comment[]> = {};
+          await Promise.all(
+            ps.map(async (x) => {
+              const id = x.post_id ?? x.id;
+              if (!id) return;
+              l[id] = await getLikeCount(id).catch(() => 0);
+              c[id] = await getCommentsForPost(id).catch(() => []);
+            }),
+          );
+          setLikes(l);
+          setComments(c);
         }
-      } catch (err) {
-        setError("Failed to load profile details.");
+        setLikedIds(await getMyLikedPostIds());
+        setActivity(await getMyComments());
+      } catch (e) {
+        setError("Could not load your profile.");
+      } finally {
+        setLoading(false);
       }
-    }
-
-    loadData();
-  }, [loggedIn]);
-
-  async function handleDeletePost(postId: number) {
-    if (!window.confirm("Are you sure you want to delete this post?")) return;
-
-    setDeletingPostId(postId);
-    setStatusMessage("");
-    setError("");
-
-    try {
-      await deletePost(postId);
-      // Remove post from local state by filtering matching ID
-      setPosts((prevPosts) =>
-        prevPosts.filter((p) => (p.post_id || p.id) !== postId)
-      );
-      setStatusMessage("Post removed successfully.");
-    } catch (err) {
-      setError("Failed to delete post.");
-    } finally {
-      setDeletingPostId(null);
-    }
+    })();
+  }, []);
+  async function comment(id: number, text: string, parent?: number) {
+    await createComment(id, text, parent);
+    setComments((x) => ({ ...x, [id]: comments[id] || [] }));
+    const fresh = await getCommentsForPost(id);
+    setComments((x) => ({ ...x, [id]: fresh }));
   }
-
-  async function handleAvatarUpload(e: FormEvent) {
-    e.preventDefault();
-    if (!avatarFile) return;
-
-    setStatusMessage("");
-    setError("");
-
-    try {
-      const updatedProfile = await uploadMyAvatar(avatarFile);
-      setProfile(updatedProfile);
-      setAvatarFile(null);
-      setStatusMessage("");
-    } catch (err) {
-      setError("Failed to upload avatar.");
-    }
-  }
-
-  async function handleSaveProfile(e: FormEvent) {
-    e.preventDefault();
-    setStatusMessage("");
-    setError("");
-    setIsSubmitting(true);
-
-    try {
-      const updated = await updateMyProfile({
-        display_name: displayName,
-        bio,
-      });
-      setProfile(updated);
-      setStatusMessage("Profile updated.");
-    } catch (err) {
-      setError("Failed to update profile.");
-    } finally {
-      setIsSubmitting(false);
-    }
-  }
-
-  if (!loggedIn) {
-    return <p className="logged-out-message">Log in to view or update your profile.</p>;
-  }
-
-  return (
-    <div className="profile-wrapper">
-      <div className="profile-card">
-        <h2 className="profile-title">My Profile</h2>
-
-        {statusMessage && (
-          <Alert
-            message={statusMessage}
-            type="info"
-            onClose={() => setStatusMessage("")}
-          />
-        )}
-
-        {error && (
-          <Alert
-            message={error}
-            type="error"
-            onClose={() => setError("")}
-          />
-        )}
-
-        {/* Top Avatar Section */}
-        <div className="avatar-header">
-          <div className="avatar-frame">
-            {profile?.avatar_url ? (
-              <img src={profile.avatar_url} alt="Profile avatar" className="avatar-img" />
-            ) : (
-              <div className="avatar-placeholder">
-                {(displayName || username || "?").charAt(0).toUpperCase()}
-              </div>
-            )}
-          </div>
-
-          <form onSubmit={handleAvatarUpload} className="avatar-upload-row">
-            <label className="file-upload-label">
-              Choose Image
-              <input
-                type="file"
-                accept="image/png,image/jpeg,image/webp,image/gif"
-                onChange={(e) => setAvatarFile(e.target.files?.[0] || null)}
-                className="hidden-file-input"
-              />
-            </label>
-
-            {avatarFile && <span className="file-name">{avatarFile.name}</span>}
-
-            <button
-              type="submit"
-              disabled={!profile || !avatarFile}
-              className="btn btn-secondary"
-            >
-              Upload
-            </button>
-          </form>
-
-          {/* Follow Stats */}
-          {profile && (
-            <div className="profile-stats">
-              <div className="stat-item">
-                <span className="stat-value">{stats.followers_count}</span>
-                <span className="stat-label">Followers</span>
-              </div>
-              <div className="stat-item">
-                <span className="stat-value">{stats.following_count}</span>
-                <span className="stat-label">Following</span>
-              </div>
-            </div>
-          )}
-        </div>
-
-        <hr className="profile-divider" />
-
-        {/* Profile Details Form */}
-        <form onSubmit={handleSaveProfile} className="profile-form">
-          <div className="form-group">
-            <label className="form-label">Username</label>
-            <input
-              value={username}
-              disabled
-              placeholder="Username"
-              className="form-input input-disabled"
-            />
-          </div>
-
-          <div className="form-group">
-            <label className="form-label">Display Name</label>
-            <input
-              required
-              value={displayName}
-              onChange={(e) => setDisplayName(e.target.value)}
-              placeholder="Display Name"
-              className="form-input"
-            />
-          </div>
-
-          <div className="form-group">
-            <label className="form-label">Bio</label>
-            <textarea
-              value={bio}
-              onChange={(e) => setBio(e.target.value)}
-              placeholder="Tell people about yourself..."
-              rows={4}
-              className="form-input form-textarea"
-            />
-          </div>
-
-          <button type="submit" disabled={isSubmitting} className="btn btn-primary">
-            {isSubmitting ? "Saving..." : profile ? "Save Changes" : "Create Profile"}
-          </button>
-        </form>
-
-        <hr className="profile-divider" />
-
-        {/* User Posts Section */}
-        <div className="profile-posts-section">
-          {posts.length === 0 ? (
-            <p className="no-posts-message">No posts published yet.</p>
-          ) : (
-            <div className="user-posts-list">
-              {posts.map((post) => {
-                const targetId = post.post_id || post.id;
-                return (
-                  <div key={targetId} className="user-post-item">
-                    <p className="user-post-content">{post.content}</p>
-                    {targetId && (
-                      <button
-                        type="button"
-                        onClick={() => handleDeletePost(targetId)}
-                        disabled={deletingPostId === targetId}
-                        className="btn btn-danger btn-delete-post"
-                      >
-                        {deletingPostId === targetId ? "Deleting..." : "Delete"}
-                      </button>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
+  if (loading)
+    return (
+      <div className="center">
+        <Spinner size="lg" />
       </div>
+    );
+  if (!profile) return <ErrorMessage message="Profile not found." />;
+  const likedPosts = allPosts.filter(
+    (p) => (p.post_id ?? p.id) && likedIds.includes(p.post_id ?? p.id!),
+  );
+  const flat = Object.values(comments).flat();
+  return (
+    <div className="content-column">
+      <ProfileHeader
+        profile={profile}
+        stats={stats}
+        isOwn
+        onEdit={() => setEdit(true)}
+      />
+      <ProfileTabs />
+      <ErrorMessage message={error} onClose={() => setError("")} />
+      {tab === "posts" && (
+        <ProfilePosts
+          posts={posts}
+          likes={likes}
+          comments={comments}
+          loggedIn
+          onComment={comment}
+        />
+      )}{" "}
+      {tab === "likes" && (
+        <ProfileLikes
+          posts={likedPosts}
+          likes={likes}
+          comments={comments}
+          loggedIn
+          onComment={comment}
+        />
+      )}{" "}
+      {tab === "comments" && (
+        <ProfileComments
+          comments={
+            activity.length
+              ? activity
+              : flat.filter((c) => c.parent_comment_id == null)
+          }
+        />
+      )}{" "}
+      {tab === "replies" && (
+        <ProfileReplies
+          comments={activity.filter((c) => c.parent_comment_id != null)}
+        />
+      )}
+      <Modal open={edit} title="Edit profile" onClose={() => setEdit(false)}>
+        <EditProfile
+          profile={profile}
+          onCancel={() => setEdit(false)}
+          onSaved={(p) => {
+            setProfile(p);
+            setEdit(false);
+          }}
+        />
+      </Modal>
     </div>
   );
 }

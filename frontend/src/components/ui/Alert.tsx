@@ -1,34 +1,31 @@
-import { useEffect } from "react";
+import "./Alert.css";
 
-interface AlertProps {
+type AlertType = "error" | "info" | "success";
+
+type AlertProps = {
   message: string;
-  type?: "info" | "error" | "success";
-  duration?: number; 
+  type?: AlertType;
   onClose?: () => void;
-}
+};
 
-export function Alert({
-  message,
-  type = "info",
-  duration = 5000,
-  onClose,
-}: AlertProps) {
-  useEffect(() => {
-    if (!message || !onClose) return;
+const ICONS: Record<AlertType, string> = {
+  error: "⚠️",
+  info: "ℹ️",
+  success: "✅",
+};
 
-    const timer = setTimeout(() => {
-      onClose();
-    }, duration);
-
-    // Cleanup timer if component unmounts or message changes
-    return () => clearTimeout(timer);
-  }, [message, duration, onClose]);
-
-  if (!message) return null;
-
+export function Alert({ message, type = "info", onClose }: AlertProps) {
   return (
-    <div className={`alert alert-${type}`}>
-      <span>{message}</span>
+    <div className={`alert alert-${type}`} role="alert">
+      <span className="alert-icon" aria-hidden="true">
+        {ICONS[type]}
+      </span>
+      <span className="alert-message">{message}</span>
+      {onClose && (
+        <button type="button" className="alert-close" onClick={onClose} aria-label="Dismiss">
+          ×
+        </button>
+      )}
     </div>
   );
 }

@@ -1,39 +1,35 @@
-import { api } from "./client";
-
-export interface Post {
-  id?: number;
-  post_id?: number;
-  user_id?: number;
-  username?: string;
-  display_name?: string;
-  avatar_url?: string;
-  content: string;
-  created_at?: string;
+import api from "./client";
+import type { Post } from "../types/post";
+export type { Post };
+export async function getPosts() {
+  const r = await api.get<Post[]>("/posts");
+  return Array.isArray(r.data) ? r.data : [];
 }
-
-export async function getPosts(): Promise<Post[]> {
-  const response = await api.get<Post[]>("/posts");
-  return response.data;
-}
-
-export async function getUserPosts(username: string): Promise<Post[]> {
+export async function getUserPosts(username: string, userId?: number) {
   try {
-    const response = await api.get<Post[]>(`/posts/user/${username}`);
-    return response.data;
+    return (
+      await api.get<Post[]>(`/posts/user/${encodeURIComponent(username)}`)
+    ).data;
   } catch {
-    const allPosts = await getPosts();
-    return allPosts.filter(
-      (post) => post.username?.toLowerCase() === username.toLowerCase()
+    if (userId)
+      try {
+        return (await api.get<Post[]>(`/posts/user/${userId}`)).data;
+      } catch {}
+    const all = await getPosts();
+    return all.filter(
+      (p) =>
+        (username && p.username?.toLowerCase() === username.toLowerCase()) ||
+        (userId && p.user_id === userId),
     );
   }
 }
 export const getPostsByUser = getUserPosts;
-
-export async function deletePost(postId: number): Promise<void> {
-  await api.delete(`/posts/${postId}`);
+export async function createPost(content: string) {
+  return (await api.post<Post>("/posts/me", { content })).data;
 }
-
-export async function createPost(content: string): Promise<Post> {
-  const response = await api.post<Post>("/posts", { content });
-  return response.data;
+export async function updatePost(postId: number, content: string) {
+  return (await api.put<Post>(`/posts/${postId}`, { content })).data;
+}
+export async function deletePost(postId: number) {
+  await api.delete(`/posts/${postId}`);
 }

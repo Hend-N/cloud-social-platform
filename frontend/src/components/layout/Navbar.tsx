@@ -1,38 +1,36 @@
-import { Link, useNavigate } from "react-router-dom";
+import { Link, NavLink, useNavigate } from "react-router-dom";
 import { isLoggedIn, logout } from "../../auth/token";
-import { Button } from "../ui/Button";
-import "./Navbar.css";
-
 export function Navbar() {
-  const navigate = useNavigate();
-  const loggedIn = isLoggedIn();
-
-  function handleLogout() {
-    logout();
-    navigate("/login");
-  }
-
+  const nav = useNavigate();
+  const logged = isLoggedIn();
   return (
     <header className="navbar">
-      <Link to="/feed" className="navbar-brand">
+      <Link to="/feed" className="brand">
+        <span className="brand-dot" />
         Cloud Social
       </Link>
-
-      <nav className="navbar-links">
-        <Link to="/feed">Feed</Link>
-        <Link to="/profiles">Find Profile</Link>
-
-        {loggedIn ? (
+      <nav>
+        <NavLink to="/feed">Feed</NavLink>
+        <NavLink to="/profiles">Discover</NavLink>
+        {logged ? (
           <>
-            <Link to="/profile/me">My Profile</Link>
-            <Button variant="secondary" onClick={handleLogout}>
-              Logout
-            </Button>
+            <NavLink to="/profile/me">Profile</NavLink>
+            <button
+              className="nav-logout"
+              onClick={() => {
+                logout();
+                nav("/login");
+              }}
+            >
+              Sign out
+            </button>
           </>
         ) : (
           <>
-            <Link to="/login">Login</Link>
-            <Link to="/register">Register</Link>
+            <NavLink to="/login">Sign in</NavLink>
+            <NavLink className="nav-cta" to="/register">
+              Join
+            </NavLink>
           </>
         )}
       </nav>

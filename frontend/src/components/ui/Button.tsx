@@ -1,16 +1,20 @@
-import type { ButtonHTMLAttributes, ReactNode } from "react";
-import "./Button.css";
-
-type ButtonVariant = "primary" | "secondary" | "danger";
-
-type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
-  children: ReactNode;
-  variant?: ButtonVariant;
-};
-
-export function Button({ children, variant = "primary", ...props }: ButtonProps) {
+import type { ButtonHTMLAttributes } from "react";
+export function Button({
+  variant = "primary",
+  loading = false,
+  children,
+  ...p
+}: {
+  variant?: "primary" | "secondary" | "ghost" | "danger";
+  loading?: boolean;
+} & ButtonHTMLAttributes<HTMLButtonElement>) {
   return (
-    <button {...props} className={`btn btn-${variant}`}>
+    <button
+      className={`ui-button ${variant}`}
+      disabled={loading || p.disabled}
+      {...p}
+    >
+      {loading ? <span className="button-spinner" /> : null}
       {children}
     </button>
   );

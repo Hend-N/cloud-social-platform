@@ -1,0 +1,30 @@
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  background: transparent;
+  color: var(--color-text);
+}
+
+.app-content-wrapper {
+  display: flex;
+  flex: 1;
+  max-width: var(--max-width);
+  width: 100%;
+  margin: 0 auto;
+  padding: 8px 20px 40px;
+  gap: 24px;
+  align-items: flex-start;
+}
+
+.app-main-content {
+  flex: 1;
+  min-width: 0;
+}
+
+@media (max-width: 768px) {
+  .app-content-wrapper {
+    flex-direction: column;
+    padding: 8px 14px 32px;
+  }
+}

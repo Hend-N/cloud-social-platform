@@ -1,15 +1,11 @@
 import type { ReactNode } from "react";
-import { Navigate } from "react-router-dom";
+import { Navigate, useLocation } from "react-router-dom";
 import { isLoggedIn } from "./token";
-
-type ProtectedRouteProps = {
-  children: ReactNode;
-};
-
-export function ProtectedRoute({ children }: ProtectedRouteProps) {
-  if (!isLoggedIn()) {
-    return <Navigate to="/login" replace />;
-  }
-
-  return <>{children}</>;
+export function ProtectedRoute({ children }: { children: ReactNode }) {
+  const loc = useLocation();
+  return isLoggedIn() ? (
+    <>{children}</>
+  ) : (
+    <Navigate to="/login" replace state={{ from: loc.pathname + loc.search }} />
+  );
 }
