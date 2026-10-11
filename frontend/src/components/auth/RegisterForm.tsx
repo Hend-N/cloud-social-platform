@@ -15,6 +15,7 @@ export function RegisterForm() {
   const nav = useNavigate();
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    e.stopPropagation();
     setError("");
     setLoading(true);
     try {
@@ -29,14 +30,14 @@ export function RegisterForm() {
     }
   }
   return (
-    <form onSubmit={submit} className="auth-form">
-      <Input
-        label="Username"
-        value={username}
-        onChange={(e) => setUsername(e.target.value.trim())}
-        required
-        minLength={2}
-      />
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          submit(e);
+        }}
+        className="auth-form"
+      >
       <Input
         label="Email"
         type="email"

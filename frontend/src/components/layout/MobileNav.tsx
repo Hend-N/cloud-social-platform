@@ -4,6 +4,7 @@ export function MobileNav() {
     <nav className="mobile-nav">
       <NavLink to="/feed">Feed</NavLink>
       <NavLink to="/profiles">Discover</NavLink>
+      <NavLink to="/my-posts">My posts</NavLink>
       <NavLink to="/profile/me">Profile</NavLink>
     </nav>
   );

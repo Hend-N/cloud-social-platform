@@ -1,23 +1,23 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { login, getMe } from '../../api/auth';
-import { getMyProfile, createMyProfile } from '../../api/users';
-import { getApiErrorMessage } from '../../api/errors';
-import { Input } from '../ui/Input';
-import { Button } from '../ui/Button';
-import { ErrorMessage } from '../ui/ErrorMessage';
+import { useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { login, getMe } from "../../api/auth";
+import { getMyProfile, createMyProfile } from "../../api/users";
+import { getApiErrorMessage } from "../../api/errors";
+import { Input } from "../ui/Input";
+import { Button } from "../ui/Button";
+import { ErrorMessage } from "../ui/ErrorMessage";
 
 export function LoginForm() {
-  const [identifier, setIdentifier] = useState('');
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
+  const [identifier, setIdentifier] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
   const nav = useNavigate();
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    setError('');
+    setError("");
     setLoading(true);
 
     try {
@@ -31,16 +31,16 @@ export function LoginForm() {
           await createMyProfile({
             username: u.username,
             display_name: u.username,
-            bio: '',
+            bio: "",
           });
         } else {
           throw x;
         }
       }
 
-      nav('/feed');
+      nav("/feed");
     } catch (e) {
-      setError(getApiErrorMessage(e, 'Unable to sign in.'));
+      setError(getApiErrorMessage(e, "Unable to sign in."));
     } finally {
       setLoading(false);
     }
@@ -65,7 +65,7 @@ export function LoginForm() {
       />
       <ErrorMessage message={error} />
       <Button type="submit" loading={loading}>
-        {loading ? 'Signing in' : 'Sign in'}
+        {loading ? "Signing in" : "Sign in"}
       </Button>
     </form>
   );

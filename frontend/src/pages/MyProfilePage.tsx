@@ -1,17 +1,10 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { getMyProfile, getPublicProfileByUserId } from "../api/users";
-import type { Profile } from "../types/user";
-import { getFollowStats } from "../api/follows";
+import { getMyProfile } from "../api/users";
 import { getUserPosts, getPosts } from "../api/posts";
-import type { Post } from "../types/post";
-import { getLikeCount, getMyLikedPostIds } from "../api/likes";
-import {
-  getMyComments,
-  getCommentsForPost,
-  createComment,
-} from "../api/comments";
-import type { Comment } from "../types/comment";
+import { getFollowStats } from "../api/follows";
+import { getMyComments } from "../api/comments";
+import { getMyLikedPostIds } from "../api/likes";
 import { ProfileHeader } from "../components/profile/ProfileHeader";
 import { ProfileTabs } from "../components/profile/ProfileTabs";
 import { ProfilePosts } from "../components/profile/ProfilePosts";
@@ -22,120 +15,116 @@ import { EditProfile } from "../components/profile/EditProfile";
 import { Modal } from "../components/ui/Modal";
 import { Spinner } from "../components/ui/Spinner";
 import { ErrorMessage } from "../components/ui/ErrorMessage";
+import { getApiErrorMessage } from "../api/errors";
+import type { Profile } from "../types/user";
+import type { FollowStats } from "../types/follow";
+import type { Post } from "../types/post";
+import type { Comment } from "../types/comment";
+
 export function MyProfilePage() {
-  const [params] = useSearchParams(),
-    tab = params.get("tab") || "posts";
-  const [profile, setProfile] = useState<Profile | null>(null),
-    [stats, setStats] = useState({ followers_count: 0, following_count: 0 }),
-    [posts, setPosts] = useState<Post[]>([]),
-    [allPosts, setAllPosts] = useState<Post[]>([]),
-    [likes, setLikes] = useState<Record<number, number>>({}),
-    [comments, setComments] = useState<Record<number, Comment[]>>({}),
-    [activity, setActivity] = useState<Comment[]>([]),
-    [likedIds, setLikedIds] = useState<number[]>([]),
-    [edit, setEdit] = useState(false),
-    [loading, setLoading] = useState(true),
-    [error, setError] = useState("");
-  useEffect(() => {
-    (async () => {
-      try {
-        const p = await getMyProfile();
-        setProfile(p);
-        const uid = p.user_id ?? p.id;
-        if (uid) {
-          setStats(await getFollowStats(uid));
-          const ps = await getUserPosts(p.username || "", uid);
-          setPosts(ps);
-          setAllPosts(await getPosts());
-          const l: Record<number, number> = {},
-            c: Record<number, Comment[]> = {};
-          await Promise.all(
-            ps.map(async (x) => {
-              const id = x.post_id ?? x.id;
-              if (!id) return;
-              l[id] = await getLikeCount(id).catch(() => 0);
-              c[id] = await getCommentsForPost(id).catch(() => []);
-            }),
-          );
-          setLikes(l);
-          setComments(c);
-        }
-        setLikedIds(await getMyLikedPostIds());
-        setActivity(await getMyComments());
-      } catch (e) {
-        setError("Could not load your profile.");
-      } finally {
-        setLoading(false);
-      }
-    })();
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [stats, setStats] = useState<FollowStats>({
+    followers_count: 0,
+    following_count: 0,
+  });
+  const [posts, setPosts] = useState<Post[]>([]);
+  const [likedPosts, setLikedPosts] = useState<Post[]>([]);
+  const [likedPostIds, setLikedPostIds] = useState<number[]>([]);
+  const [myComments, setMyComments] = useState<Comment[]>([]);
+  const [editing, setEditing] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [params] = useSearchParams();
+  const tab = params.get("tab") || "posts";
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const p = await getMyProfile();
+      setProfile(p);
+      const uid = p.user_id ?? p.id;
+      const [s, userPosts, mine, liked] = await Promise.all([
+        uid ? getFollowStats(uid) : Promise.resolve({ followers_count: 0, following_count: 0 }),
+        getUserPosts(p.username ?? "", uid),
+        getMyComments(),
+        getMyLikedPostIds(),
+      ]);
+      setStats(s);
+      setPosts(userPosts);
+      setMyComments(mine);
+      setLikedPostIds(liked);
+    } catch (e) {
+      setError(getApiErrorMessage(e, "Could not load your profile."));
+    } finally {
+      setLoading(false);
+    }
   }, []);
-  async function comment(id: number, text: string, parent?: number) {
-    await createComment(id, text, parent);
-    setComments((x) => ({ ...x, [id]: comments[id] || [] }));
-    const fresh = await getCommentsForPost(id);
-    setComments((x) => ({ ...x, [id]: fresh }));
-  }
-  if (loading)
-    return (
-      <div className="center">
-        <Spinner size="lg" />
-      </div>
-    );
-  if (!profile) return <ErrorMessage message="Profile not found." />;
-  const likedPosts = allPosts.filter(
-    (p) => (p.post_id ?? p.id) && likedIds.includes(p.post_id ?? p.id!),
-  );
-  const flat = Object.values(comments).flat();
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  // The Likes tab lists every post I liked (not only my own), so it needs
+  // the global feed filtered by my liked ids.
+  useEffect(() => {
+    if (tab !== "likes") return;
+    let cancelled = false;
+    getPosts()
+      .then((all) => {
+        if (!cancelled)
+          setLikedPosts(
+            all.filter((p) => likedPostIds.includes((p.post_id ?? p.id) as number)),
+          );
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [tab, likedPostIds]);
+
+  const dropPost = (id: number) => {
+    setPosts((prev) => prev.filter((p) => (p.post_id ?? p.id) !== id));
+    setLikedPosts((prev) => prev.filter((p) => (p.post_id ?? p.id) !== id));
+  };
+
+  if (loading) return <Spinner />;
+  if (!profile)
+    return <ErrorMessage message={error || "Profile not found."} />;
+
   return (
-    <div className="content-column">
+    <div className="profile-page">
       <ProfileHeader
         profile={profile}
         stats={stats}
         isOwn
-        onEdit={() => setEdit(true)}
+        onEdit={() => setEditing(true)}
       />
       <ProfileTabs />
-      <ErrorMessage message={error} onClose={() => setError("")} />
       {tab === "posts" && (
         <ProfilePosts
           posts={posts}
-          likes={likes}
-          comments={comments}
-          loggedIn
-          onComment={comment}
-        />
-      )}{" "}
-      {tab === "likes" && (
-        <ProfileLikes
-          posts={likedPosts}
-          likes={likes}
-          comments={comments}
-          loggedIn
-          onComment={comment}
-        />
-      )}{" "}
-      {tab === "comments" && (
-        <ProfileComments
-          comments={
-            activity.length
-              ? activity
-              : flat.filter((c) => c.parent_comment_id == null)
-          }
-        />
-      )}{" "}
-      {tab === "replies" && (
-        <ProfileReplies
-          comments={activity.filter((c) => c.parent_comment_id != null)}
+          likedPostIds={likedPostIds}
+          onDeleted={dropPost}
         />
       )}
-      <Modal open={edit} title="Edit profile" onClose={() => setEdit(false)}>
+      {tab === "likes" && (
+        <ProfileLikes posts={likedPosts} onDeleted={dropPost} />
+      )}
+      {tab === "comments" && <ProfileComments comments={myComments} />}
+      {tab === "replies" && (
+        <ProfileReplies
+          comments={myComments.filter((c) => c.parent_comment_id != null)}
+        />
+      )}
+      <Modal open={editing} title="Edit profile" onClose={() => setEditing(false)}>
         <EditProfile
           profile={profile}
-          onCancel={() => setEdit(false)}
           onSaved={(p) => {
             setProfile(p);
-            setEdit(false);
+            setEditing(false);
           }}
+          onCancel={() => setEditing(false)}
         />
       </Modal>
     </div>

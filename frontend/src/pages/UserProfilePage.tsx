@@ -15,7 +15,7 @@ import type { FollowStats } from "../api/follows";
 import { isLoggedIn } from "../auth/token";
 
 import { PostCard } from "../components/posts/PostCard";
-import { LoadingSpinner } from "../components/ui/Spinner";
+import { Spinner } from "../components/ui/Spinner";
 import { EmptyState } from "../components/ui/EmptyState";
 import { Alert } from "../components/ui/Alert";
 import "./UserProfilePage.css";
@@ -126,7 +126,7 @@ export function UserProfilePage() {
     }
   }
 
-  if (isLoading) return <LoadingSpinner size="lg" />;
+  if (isLoading) return <Spinner size="lg" />;
 
   const displayName = profile?.display_name || profile?.username || username || "User";
   const initial = displayName.charAt(0).toUpperCase();
@@ -172,21 +172,21 @@ export function UserProfilePage() {
         posts.map((post) => {
           const pid = getPostId(post);
           if (!pid) return null;
-
-          return (
-            <PostCard
-              key={pid}
-              post={post}
-              postId={pid}
-              likeCount={likeCounts[pid] ?? 0}
-              comments={commentsByPost[pid] ?? []}
-              loggedIn={loggedIn}
-              profilesByUserId={profile ? { [profile.user_id || 0]: profile } : {}}
-              onLike={handleLike}
-              onUnlike={handleUnlike}
-              onAddComment={handleAddComment}
-            />
-          );
+          <PostCard
+            key={pid}
+            post={post}
+            postId={pid}
+            likeCount={likeCounts[pid]}
+            likedByMe={false}   // optional
+            onDeleted={(id) => {
+              setPosts((prev) => prev.filter((p) => getPostId(p) !== id));
+            }}
+            onUpdated={(updatedPost) => {
+              setPosts((prev) =>
+                prev.map((p) => (getPostId(p) === getPostId(updatedPost) ? updatedPost : p))
+              );
+            }}
+          />
         })
       )}
     </div>

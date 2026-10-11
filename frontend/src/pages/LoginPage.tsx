@@ -4,11 +4,7 @@ export function LoginPage() {
   return (
     <div className="auth-page">
       <div className="auth-card">
-        <div className="eyebrow">WELCOME BACK</div>
-        <h1>Sign in to Cloud Social</h1>
-        <p className="muted">
-          Continue the conversation and see what your community is sharing.
-        </p>
+        <h1>Welcome back</h1>
         <LoginForm />
         <p className="auth-switch">
           New here? <Link to="/register">Create an account</Link>

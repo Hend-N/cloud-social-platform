@@ -5,5 +5,7 @@ export interface Comment {
   parent_comment_id: number | null;
   comment: string;
   username?: string;
+  display_name?: string;
+  avatar_url?: string;
   created_at?: string;
 }

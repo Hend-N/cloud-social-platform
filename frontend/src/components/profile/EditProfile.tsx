@@ -1,10 +1,11 @@
 import { useState } from "react";
+import type { Profile } from "../../types/user";
 import { updateMyProfile, uploadMyAvatar } from "../../api/users";
+import { getApiErrorMessage } from "../../api/errors";
 import { Input } from "../ui/Input";
 import { Textarea } from "../ui/Textarea";
 import { Button } from "../ui/Button";
 import { ErrorMessage } from "../ui/ErrorMessage";
-import type { Profile } from "../../types/user";
 export function EditProfile({
   profile,
   onSaved,
@@ -14,34 +15,35 @@ export function EditProfile({
   onSaved: (p: Profile) => void;
   onCancel: () => void;
 }) {
-  const [name, setName] = useState(profile.display_name || ""),
-    [bio, setBio] = useState(profile.bio || ""),
-    [file, setFile] = useState<File>(),
-    [loading, setLoading] = useState(false),
-    [error, setError] = useState("");
-  async function save(e: React.FormEvent) {
+  const [displayName, setDisplayName] = useState(profile.display_name || "");
+  const [bio, setBio] = useState(profile.bio || "");
+  const [avatar, setAvatar] = useState<File | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submit(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
     setError("");
     try {
-      let p = await updateMyProfile({
-        display_name: name.trim(),
-        bio: bio.trim(),
-      });
-      if (file) p = await uploadMyAvatar(file);
-      onSaved(p);
+      let updated = await updateMyProfile({ display_name: displayName, bio });
+      if (avatar) {
+        updated = await uploadMyAvatar(avatar);
+      }
+      onSaved(updated);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not update profile.");
+      setError(getApiErrorMessage(e, "Could not update your profile."));
     } finally {
       setLoading(false);
     }
   }
+
   return (
-    <form className="edit-profile" onSubmit={save}>
+    <form className="edit-profile" onSubmit={submit}>
       <Input
         label="Display name"
-        value={name}
-        onChange={(e) => setName(e.target.value)}
+        value={displayName}
+        onChange={(e) => setDisplayName(e.target.value)}
         required
       />
       <Textarea
@@ -55,7 +57,7 @@ export function EditProfile({
         <input
           type="file"
           accept="image/*"
-          onChange={(e) => setFile(e.target.files?.[0])}
+          onChange={(e) => setAvatar(e.target.files?.[0] ?? null)}
         />
       </label>
       <ErrorMessage message={error} />
@@ -64,7 +66,7 @@ export function EditProfile({
           Cancel
         </Button>
         <Button type="submit" loading={loading}>
-          Save changes
+          Save
         </Button>
       </div>
     </form>

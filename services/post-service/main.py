@@ -84,14 +84,14 @@ def create_post(request: CreatePostRequest, current_user_id: int = Depends(get_c
             "content": new_post.content,
             "created_at": new_post.created_at.isoformat()
         }
-            
+
     finally:
         session.close()
 
 @app.delete("/posts/{post_id}")
 def delete_post(post_id: int, current_user_id: int = Depends(get_current_user_id)):
     session = SessionLocal()
-    try: 
+    try:
         post = session.query(Post).filter(Post.post_id == post_id).first()
         if post is None:
             raise HTTPException(status_code=404, detail="post not found")
@@ -101,7 +101,7 @@ def delete_post(post_id: int, current_user_id: int = Depends(get_current_user_id
                 status_code=403,
                 detail="not authorized to delete this post"
             )
-        
+
         session.delete(post)
         session.commit()
         return {"message": "post deleted"}
@@ -148,6 +148,34 @@ def get_my_posts(current_user_id: int = Depends(get_current_user_id)):
     finally:
         session.close()
 
+@app.get("/posts/user/{user_id}")
+def get_posts_by_user(user_id: int):
+    """
+    Public endpoint: returns all posts authored by a given user.
+
+    Used by profile pages (own profile and other users' profiles) to
+    render that user's posts without requiring the client to fetch and
+    filter the entire global feed.
+    """
+    session = SessionLocal()
+    try:
+        posts = session.query(Post).filter(
+            Post.user_id == user_id
+        ).order_by(Post.created_at.desc()).all()
+
+        return [
+            {
+                "post_id": post.post_id,
+                "user_id": post.user_id,
+                "content": post.content,
+                "created_at": post.created_at.isoformat()
+            }
+            for post in posts
+        ]
+
+    finally:
+        session.close()
+
 @app.put("/posts/{post_id}")
 def update_post(post_id: int, request: CreatePostRequest, current_user_id: int = Depends(get_current_user_id)):
     session = SessionLocal()
@@ -155,10 +183,10 @@ def update_post(post_id: int, request: CreatePostRequest, current_user_id: int =
         post = session.query(Post).filter(Post.post_id == post_id).first()
         if post is None:
             raise HTTPException(status_code=404, detail="post not found")
-        
+
         if post.user_id != current_user_id:
             raise HTTPException(status_code=403, detail="not authorized to update this post")
-        
+
         post.content = request.content
         session.commit()
         session.refresh(post)
@@ -174,9 +202,3 @@ def update_post(post_id: int, request: CreatePostRequest, current_user_id: int =
 @app.get("/health")
 def health():
     return {"status": "ok"}
-
-
-
-#cd ~/projects/cloud-social-platform/services/post-service
-#source venv/bin/activate
-#uvicorn main:app --reload --port 8003

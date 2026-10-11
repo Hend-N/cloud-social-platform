@@ -1,22 +1,14 @@
 .card {
-  background: var(--color-surface);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  padding: 24px;
-  box-shadow: var(--shadow-md);
-  animation: fadeIn var(--transition-base) both;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1rem;
 }
-
 .card-interactive {
-  transition: transform var(--transition-base), border-color var(--transition-base),
-    box-shadow var(--transition-base);
+  transition: box-shadow 0.15s ease, transform 0.15s ease;
   cursor: pointer;
 }
-
 .card-interactive:hover {
-  transform: translateY(-3px);
-  border-color: var(--color-primary-soft-border);
-  box-shadow: var(--shadow-lg);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+  transform: translateY(-1px);
 }

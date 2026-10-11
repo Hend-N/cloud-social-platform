@@ -14,6 +14,7 @@ export function Navbar() {
         <NavLink to="/profiles">Discover</NavLink>
         {logged ? (
           <>
+            <NavLink to="/my-posts">My posts</NavLink>
             <NavLink to="/profile/me">Profile</NavLink>
             <button
               className="nav-logout"

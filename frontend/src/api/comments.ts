@@ -29,8 +29,11 @@ export async function createComment(
 export async function updateComment(id: number, content: string) {
   return (await api.put<Comment>(`/comments/${id}`, { comment: content })).data;
 }
-export async function deleteComment(id: number) {
-  await api.delete(`/comments/${id}`);
+// The backend deletes a comment together with all of its replies and
+// returns every deleted id, so callers can drop the whole branch from state.
+export async function deleteComment(id: number): Promise<number[]> {
+  const data = (await api.delete(`/comments/${id}`)).data;
+  return Array.isArray(data?.deleted_ids) ? data.deleted_ids : [id];
 }
 // Reserved for a future dedicated replies endpoint. Intentionally no network call.
 export async function getMyReplies(): Promise<Comment[]> {

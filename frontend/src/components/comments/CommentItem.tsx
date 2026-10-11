@@ -1,7 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Comment } from "../../types/comment";
-import { Avatar } from "../ui/Avatar";
-import { ReplyForm } from "./ReplyForm";
 import {
   likeComment,
   dislikeComment,
@@ -9,94 +7,217 @@ import {
   getCommentReactionCount,
   getMyCommentReaction,
 } from "../../api/likes";
+import { getApiErrorMessage } from "../../api/errors";
+import { ReplyForm } from "./ReplyForm";
+import { CommentForm } from "./CommentForm";
+import { KebabMenu } from "../ui/KebabMenu";
+import { ConfirmDialog } from "../ui/ConfirmDialog";
+import { ErrorMessage } from "../ui/ErrorMessage";
+
+type Reaction = "like" | "dislike" | null;
+
 export function CommentItem({
   comment,
-  replies,
+  childrenMap,
   loggedIn,
+  currentUserId,
   onReply,
+  onEdit,
+  onDelete,
 }: {
   comment: Comment;
-  replies: Comment[];
+  childrenMap: Map<number, Comment[]>;
   loggedIn: boolean;
-  onReply: (text: string, parent: number) => Promise<void>;
+  currentUserId?: number;
+  onReply: (text: string, parentId: number) => Promise<void>;
+  onEdit: (id: number, text: string) => Promise<void>;
+  onDelete: (id: number) => Promise<void>;
 }) {
-  const [replying, setReplying] = useState(false),
-    [reaction, setReaction] = useState<"like" | "dislike" | null>(null),
-    [likes, setLikes] = useState(0),
-    [dislikes, setDislikes] = useState(0);
-  const name = comment.username || "User";
-  async function react(r: "like" | "dislike") {
-    if (!loggedIn) return;
+  const [replying, setReplying] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [reaction, setReaction] = useState<Reaction>(null);
+  const [likes, setLikes] = useState(0);
+  const [dislikes, setDislikes] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const replies = childrenMap.get(comment.id) ?? [];
+  const isOwner = currentUserId != null && comment.user_id === currentUserId;
+  const author =
+    comment.display_name || comment.username
+      ? `${comment.display_name ?? comment.username}${
+          comment.display_name && comment.username ? ` @${comment.username}` : ""
+        }`
+      : `User ID: ${comment.user_id}`;
+
+  // Counts are public; "my reaction" needs a login.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const c = await getCommentReactionCount(comment.id);
+        if (!cancelled) {
+          setLikes(c.like_count || 0);
+          setDislikes(c.dislike_count || 0);
+        }
+      } catch {
+        /* counts stay at 0 */
+      }
+      if (loggedIn) {
+        try {
+          const r = await getMyCommentReaction(comment.id);
+          if (!cancelled) setReaction(r);
+        } catch {
+          /* reaction stays empty */
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [comment.id, loggedIn]);
+
+  async function react(next: "like" | "dislike") {
+    if (!loggedIn || busy) return;
+    setBusy(true);
+    setError("");
     try {
-      if (reaction === r) {
+      if (reaction === next) {
         await removeCommentReaction(comment.id);
         setReaction(null);
       } else {
-        if (r === "like") await likeComment(comment.id);
+        if (next === "like") await likeComment(comment.id);
         else await dislikeComment(comment.id);
-        setReaction(r);
+        setReaction(next);
       }
       const c = await getCommentReactionCount(comment.id);
       setLikes(c.like_count || 0);
       setDislikes(c.dislike_count || 0);
-    } catch {}
+    } catch (e) {
+      setError(getApiErrorMessage(e, "Could not update your reaction."));
+    } finally {
+      setBusy(false);
+    }
   }
-  useState(() => {
-    if (loggedIn)
-      getMyCommentReaction(comment.id)
-        .then(setReaction)
-        .catch(() => {});
-  });
+
+  async function remove() {
+    setConfirmDelete(false);
+    setError("");
+    try {
+      await onDelete(comment.id);
+    } catch (e) {
+      setError(getApiErrorMessage(e, "Could not delete the comment."));
+    }
+  }
+
   return (
-    <div className="comment-item">
-      <Avatar size="sm" name={name} />
-      <div className="comment-body">
-        <div className="comment-head">
-          <strong>{name}</strong>
-          <span>@{comment.username || "user"}</span>
+    <div className="comment-thread">
+      <div className="comment-card">
+        {editing ? (
+          <CommentForm
+            initialValue={comment.comment}
+            submitLabel="Save"
+            placeholder="Edit your comment"
+            onCancel={() => setEditing(false)}
+            onSubmit={async (text) => {
+              await onEdit(comment.id, text);
+              setEditing(false);
+            }}
+          />
+        ) : (
+          <p className="comment-text">{comment.comment}</p>
+        )}
+
+        <div className="comment-footer">
+          <span className="comment-author">{author}</span>
+          <div className="comment-tools">
+            <button
+              type="button"
+              className={`react-btn ${reaction === "like" ? "active" : ""}`}
+              onClick={() => react("like")}
+              disabled={!loggedIn || busy}
+              aria-pressed={reaction === "like"}
+              aria-label="Like comment"
+            >
+              👍 <span>{likes}</span>
+            </button>
+            <button
+              type="button"
+              className={`react-btn ${reaction === "dislike" ? "active" : ""}`}
+              onClick={() => react("dislike")}
+              disabled={!loggedIn || busy}
+              aria-pressed={reaction === "dislike"}
+              aria-label="Dislike comment"
+            >
+              👎 <span>{dislikes}</span>
+            </button>
+            {loggedIn && (
+              <button
+                type="button"
+                className="link-btn"
+                onClick={() => setReplying((r) => !r)}
+              >
+                Reply
+              </button>
+            )}
+            {isOwner && (
+              <KebabMenu
+                label="Comment actions"
+                items={[
+                  { label: "Edit", onClick: () => setEditing(true) },
+                  {
+                    label: "Delete",
+                    danger: true,
+                    onClick: () => setConfirmDelete(true),
+                  },
+                ]}
+              />
+            )}
+          </div>
         </div>
-        <p>{comment.comment}</p>
-        <div className="comment-tools">
-          <button
-            className={reaction === "like" ? "active" : ""}
-            onClick={() => react("like")}
-            disabled={!loggedIn}
-          >
-            Like {likes || ""}
-          </button>
-          <button
-            className={reaction === "dislike" ? "active" : ""}
-            onClick={() => react("dislike")}
-            disabled={!loggedIn}
-          >
-            Dislike {dislikes || ""}
-          </button>
-          {loggedIn && (
-            <button onClick={() => setReplying((x) => !x)}>Reply</button>
-          )}
-        </div>
+
+        <ErrorMessage message={error} />
+
         {replying && (
           <ReplyForm
+            onCancel={() => setReplying(false)}
             onSubmit={async (text) => {
               await onReply(text, comment.id);
               setReplying(false);
             }}
           />
         )}
-        {replies.length > 0 && (
-          <div className="replies">
-            {replies.map((r) => (
-              <CommentItem
-                key={r.id}
-                comment={r}
-                replies={[]}
-                loggedIn={loggedIn}
-                onReply={onReply}
-              />
-            ))}
-          </div>
-        )}
       </div>
+
+      {replies.length > 0 && (
+        <div className="comment-replies">
+          {replies.map((r) => (
+            <CommentItem
+              key={r.id}
+              comment={r}
+              childrenMap={childrenMap}
+              loggedIn={loggedIn}
+              currentUserId={currentUserId}
+              onReply={onReply}
+              onEdit={onEdit}
+              onDelete={onDelete}
+            />
+          ))}
+        </div>
+      )}
+
+      <ConfirmDialog
+        open={confirmDelete}
+        title="Delete comment?"
+        message={
+          replies.length
+            ? "This comment and all replies to it will be permanently deleted."
+            : "This comment will be permanently deleted."
+        }
+        onConfirm={remove}
+        onCancel={() => setConfirmDelete(false)}
+      />
     </div>
   );
 }

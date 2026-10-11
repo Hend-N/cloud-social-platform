@@ -50,7 +50,6 @@ export async function getMyCommentReaction(
     (await api.get(`/likes/comments/${id}/reaction`)).data?.reaction ?? null
   );
 }
-// Reserved batch endpoint; safe no-op until backend contract is finalized.
 export async function getBatchCommentReactions(
   ids: number[],
 ): Promise<Record<number, CommentReaction>> {

@@ -64,7 +64,7 @@ CIRCUIT_COOLDOWN_SECONDS = float(
 
 REDIS_URL = os.getenv(
     "REDIS_URL",
-    "redis://redis:6379/0"
+    "redis://localhost:6379/0"
 )
 
 RATE_LIMIT_BACKEND = os.getenv(
@@ -299,6 +299,10 @@ PUBLIC_PATTERN_ROUTES = [
     },
     {
         "method": "GET",
+        "pattern": ["api", "likes", "comments", "{int}", "count"],
+    },
+    {
+        "method": "GET",
         "pattern": ["api", "follows", "users", "{int}", "followers"],
     },
     {
@@ -307,17 +311,60 @@ PUBLIC_PATTERN_ROUTES = [
     },
     {
         "method": "GET",
-        "pattern": ["api", "follows", "status", "{int}"],
+        "pattern": ["api", "follows", "users", "{int}", "stats"],
+    },
+    {
+        "method": "GET",
+        "pattern": ["api", "posts", "user", "{int}"],
     },
 ]
 
+# NOTE: "/api/profiles/me" and "/api/users/me" are intentionally NOT public,
+# even though they would otherwise match the "{str}"/"username" pattern
+# above. classify_route() checks PROTECTED routes before PUBLIC routes so
+# that reserved paths like "me" are never accidentally treated as a public
+# username lookup.
 PROTECTED_EXACT_ROUTES = {
+    ("GET", "/api/auth/me"),
+
+    ("POST", "/api/profiles/me"),
+    ("GET", "/api/profiles/me"),
+    ("PUT", "/api/profiles/me"),
+    ("DELETE", "/api/profiles/me"),
+    ("POST", "/api/profiles/me/avatar"),
+    ("POST", "/api/users/me"),
+    ("GET", "/api/users/me"),
+    ("PUT", "/api/users/me"),
+    ("DELETE", "/api/users/me"),
+    ("POST", "/api/users/me/avatar"),
+
     ("POST", "/api/posts"),
+    ("POST", "/api/posts/me"),
+    ("GET", "/api/posts/me"),
+
+    ("GET", "/api/likes/me"),
+    ("GET", "/api/likes/comments/me"),
+    ("POST", "/api/likes/comments/batch-reactions"),
+
+    ("POST", "/api/follows"),
+    ("GET", "/api/follows/me"),
+    ("GET", "/api/follows/me/followers"),
+
     ("POST", "/api/comments"),
     ("GET", "/api/comments/user/me"),
 }
 
 PROTECTED_PATTERN_ROUTES = [
+    # Posts
+    {
+        "method": "PUT",
+        "pattern": ["api", "posts", "{int}"],
+    },
+    {
+        "method": "DELETE",
+        "pattern": ["api", "posts", "{int}"],
+    },
+
     # Post likes
     {
         "method": "POST",
@@ -345,14 +392,18 @@ PROTECTED_PATTERN_ROUTES = [
         "method": "GET",
         "pattern": ["api", "likes", "comments", "{int}", "reaction"],
     },
-    {
-        "method": "POST",
-        "pattern": ["api", "follows", "users", "{int}"],
-    },
+
+    # Follows
     {
         "method": "DELETE",
-        "pattern": ["api", "follows", "users", "{int}"],
+        "pattern": ["api", "follows", "{int}"],
     },
+    {
+        "method": "GET",
+        "pattern": ["api", "follows", "status", "{int}"],
+    },
+
+    # Comments
     {
         "method": "PUT",
         "pattern": ["api", "comments", "{int}"],
@@ -588,8 +639,23 @@ def classify_route(method: str, path: str) -> str:
     - public: No authentication required.
     - protected: Valid JWT required in Authorization header.
     - unknown: Unrecognized route -> 404 Not Found.
+
+    Protected routes are checked before public routes. This matters
+    because some protected paths (e.g. "/api/profiles/me") share a shape
+    with a broader public pattern (e.g. "/api/profiles/{str}" for public
+    username lookups). Checking protected routes first guarantees that a
+    reserved segment like "me" is always treated as "the current user",
+    never as a public username lookup.
     """
-    # 1. Public checks
+    # 1. Protected checks (most specific / reserved routes first)
+    if (method, path) in PROTECTED_EXACT_ROUTES:
+        return "protected"
+
+    for route in PROTECTED_PATTERN_ROUTES:
+        if pattern_route_matches(method, path, route):
+            return "protected"
+
+    # 2. Public checks
     if (method, path) in PUBLIC_EXACT_ROUTES:
         return "public"
 
@@ -597,13 +663,10 @@ def classify_route(method: str, path: str) -> str:
         if pattern_route_matches(method, path, route):
             return "public"
 
-    # 2. Protected checks
-    if (method, path) in PROTECTED_EXACT_ROUTES:
-        return "protected"
-
-    for route in PROTECTED_PATTERN_ROUTES:
-        if pattern_route_matches(method, path, route):
-            return "protected"
+    # 3. Anything not explicitly recognized is unknown and gets a 404
+    # instead of being silently forwarded without a gateway-level auth
+    # decision.
+    return "unknown"
 
 
 # ============================================================
@@ -2101,6 +2164,38 @@ async def enrich_posts(request: Request, posts: list):
 
     return posts
 
+
+async def enrich_comments(request: Request, comments: list):
+    """
+    Attach username/display_name/avatar_url to each comment, the same way
+    enrich_posts() does for posts. The comment-service only knows a
+    comment's user_id; it doesn't know about profiles, so the gateway
+    resolves that here instead of duplicating profile data/logic inside
+    the comment service.
+    """
+    profile_cache = {}
+
+    for comment in comments:
+        user_id = comment.get("user_id")
+
+        if user_id is None:
+            continue
+
+        if user_id not in profile_cache:
+            profile_cache[user_id] = await get_user_profile(
+                request,
+                user_id,
+            )
+
+        profile = profile_cache[user_id]
+
+        if profile:
+            comment["username"] = profile["username"]
+            comment["display_name"] = profile["display_name"]
+            comment["avatar_url"] = profile["avatar_url"]
+
+    return comments
+
 async def forward_request(service_name: str, path: str, request: Request):
     """
     Forward request from gateway to downstream service.
@@ -2411,6 +2506,30 @@ async def forward_request(service_name: str, path: str, request: Request):
         )
 
         response_content = json.dumps(posts).encode()
+
+    normalized_comment_path = path.strip("/")
+    is_comment_list_route = (
+        service_name == "comments"
+        and request.method == "GET"
+        and service_response.status_code == 200
+        and (
+            normalized_comment_path.startswith("post/")
+            or normalized_comment_path == "user/me"
+        )
+    )
+
+    if is_comment_list_route:
+        payload = service_response.json()
+        comments = payload.get("comments") if isinstance(payload, dict) else payload
+
+        if isinstance(comments, list):
+            comments = await enrich_comments(request, comments)
+
+            if isinstance(payload, dict):
+                payload["comments"] = comments
+                response_content = json.dumps(payload).encode()
+            else:
+                response_content = json.dumps(comments).encode()
 
     return Response(
         content=response_content,

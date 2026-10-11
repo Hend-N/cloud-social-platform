@@ -1,72 +1,79 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { login, getMe } from '../../api/auth';
-import { getMyProfile, createMyProfile } from '../../api/users';
-import { getApiErrorMessage } from '../../api/errors';
-import { Input } from '../ui/Input';
-import { Button } from '../ui/Button';
-import { ErrorMessage } from '../ui/ErrorMessage';
+import { useState } from "react";
+import { Link } from "react-router-dom";
+import { searchUsers } from "../api/users";
+import { getApiErrorMessage } from "../api/errors";
+import { Input } from "../components/ui/Input";
+import { Avatar } from "../components/ui/Avatar";
+import { Spinner } from "../components/ui/Spinner";
+import { EmptyState } from "../components/ui/EmptyState";
+import { ErrorMessage } from "../components/ui/ErrorMessage";
+import { FollowButton } from "../components/follows/FollowButton";
+import { isLoggedIn } from "../auth/token";
+import type { Profile } from "../types/user";
 
-export function LoginForm() {
-  const [identifier, setIdentifier] = useState('');
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
+export function DiscoverPage() {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<Profile[]>([]);
   const [loading, setLoading] = useState(false);
-
-  const nav = useNavigate();
+  const [searched, setSearched] = useState(false);
+  const [error, setError] = useState("");
+  const loggedIn = isLoggedIn();
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    setError('');
+    if (!query.trim()) return;
     setLoading(true);
-
+    setError("");
     try {
-      await login({ identifier, password });
-      const u = await getMe();
-
-      try {
-        await getMyProfile();
-      } catch (x: any) {
-        if (x?.response?.status === 404) {
-          await createMyProfile({
-            username: u.username,
-            display_name: u.username,
-            bio: '',
-          });
-        } else {
-          throw x;
-        }
-      }
-
-      nav('/feed');
+      const r = await searchUsers(query.trim());
+      setResults(r);
+      setSearched(true);
     } catch (e) {
-      setError(getApiErrorMessage(e, 'Unable to sign in.'));
+      setError(getApiErrorMessage(e, "Could not search for people."));
     } finally {
       setLoading(false);
     }
   }
 
   return (
-    <form onSubmit={submit} className="auth-form">
-      <Input
-        label="Username or email"
-        value={identifier}
-        onChange={(e) => setIdentifier(e.target.value)}
-        autoComplete="username"
-        required
-      />
-      <Input
-        label="Password"
-        type="password"
-        value={password}
-        onChange={(e) => setPassword(e.target.value)}
-        autoComplete="current-password"
-        required
-      />
+    <div className="discover-page">
+      <h1>Discover people</h1>
+      <form className="discover-search" onSubmit={submit}>
+        <Input
+          placeholder="Search by username or name…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+      </form>
       <ErrorMessage message={error} />
-      <Button type="submit" loading={loading}>
-        {loading ? 'Signing in' : 'Sign in'}
-      </Button>
-    </form>
+      {loading && <Spinner />}
+      {!loading && searched && results.length === 0 && (
+        <EmptyState
+          title="No one found"
+          description="Try a different username or display name."
+        />
+      )}
+      <div className="discover-results">
+        {results.map((p) => {
+          const name = p.display_name || p.username || "User";
+          const uid = p.user_id ?? p.id;
+          return (
+            <div className="discover-result" key={uid ?? p.username}>
+              <Link
+                to={`/profile/${encodeURIComponent(p.username || "")}`}
+                className="discover-result-link"
+              >
+                <Avatar src={p.avatar_url} name={name} />
+                <div>
+                  <strong>{name}</strong>
+                  <span>@{p.username}</span>
+                </div>
+              </Link>
+              {loggedIn && uid && <FollowButton userId={uid} />}
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }

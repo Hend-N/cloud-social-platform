@@ -160,11 +160,3 @@ def me(current_user: User = Depends(get_current_user)):
         "username": current_user.username,
         "email": current_user.email
     }
-
-#cd ~/projects/cloud-social-platform/services/auth-service
-#source venv/bin/activate
-#uvicorn main:app --reload --port 8001
-# {
-#   "email": "alice@example.com",
-#   "password": "Password123!"
-# }
