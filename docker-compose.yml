@@ -1,7 +1,27 @@
 services:
+  # Named Docker volumes can be owned by root even though the image directory
+  # was chowned during build. Initialize ownership before starting appuser services.
+  db-volume-init:
+    build: ./services/auth-service
+    user: root
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - "set -eu; chown -R appuser:appgroup /db/auth /db/user /db/post /db/like /db/follow /db/comment"
+    volumes:
+      - auth-data:/db/auth
+      - user-data:/db/user
+      - post-data:/db/post
+      - like-data:/db/like
+      - follow-data:/db/follow
+      - comment-data:/db/comment
+
   auth-service:
     build: ./services/auth-service
     restart: unless-stopped
+    depends_on:
+      db-volume-init:
+        condition: service_completed_successfully
     env_file:
       - .env
     environment:
@@ -24,6 +44,9 @@ services:
   user-service:
     build: ./services/user-service
     restart: unless-stopped
+    depends_on:
+      db-volume-init:
+        condition: service_completed_successfully
     env_file:
       - .env
     environment:
@@ -52,6 +75,9 @@ services:
   post-service:
     build: ./services/post-service
     restart: unless-stopped
+    depends_on:
+      db-volume-init:
+        condition: service_completed_successfully
     env_file:
       - .env
     environment:
@@ -81,6 +107,8 @@ services:
     volumes:
       - like-data:/app/data
     depends_on:
+      db-volume-init:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     healthcheck:
@@ -99,6 +127,9 @@ services:
   follow-service:
     build: ./services/follow-service
     restart: unless-stopped
+    depends_on:
+      db-volume-init:
+        condition: service_completed_successfully
     env_file:
       - .env
     environment:
@@ -128,6 +159,8 @@ services:
     volumes:
       - comment-data:/app/data
     depends_on:
+      db-volume-init:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     healthcheck:
@@ -269,15 +302,17 @@ services:
       AWS_SECRET_ACCESS_KEY: test
       LOCALSTACK_AUTH_TOKEN: ${LOCALSTACK_AUTH_TOKEN:-}
     volumes:
-      - "localstack-data:/var/lib/localstack"
-      - "./scripts/localstack/init-s3.py:/etc/localstack/init/ready.d/init-s3.py:ro"
+      - localstack-data:/var/lib/localstack
+      - ./scripts/localstack/init-s3.py:/etc/localstack/init/ready.d/init-s3.py:ro
     healthcheck:
       test:
         [
           "CMD",
           "awslocal",
           "s3api",
-          "list-buckets"
+          "head-bucket",
+          "--bucket",
+          "cloud-social-platform-media"
         ]
       interval: 10s
       timeout: 5s
