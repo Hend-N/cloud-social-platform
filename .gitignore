@@ -32,3 +32,6 @@ build/
 
 # Allow safe configuration templates
 !**/.env.example
+
+# TypeScript incremental build cache
+*.tsbuildinfo

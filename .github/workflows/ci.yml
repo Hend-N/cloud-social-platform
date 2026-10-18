@@ -124,3 +124,21 @@ jobs:
       - name: Stop Docker stack
         if: always()
         run: docker compose down -v
+      - name: Show logs on failure
+        if: failure()
+        run: |
+          if [ -f .env ]; then
+            docker compose ps || true
+            docker compose logs --tail=200 || true
+          else
+            echo "Docker environment was not initialized."
+          fi
+
+      - name: Stop Docker stack
+        if: always()
+        run: |
+          if [ -f .env ]; then
+            docker compose down
+          else
+            echo "Nothing to stop."
+          fi
