@@ -9,6 +9,7 @@ import { EmptyState } from "../components/ui/EmptyState";
 import { ErrorMessage } from "../components/ui/ErrorMessage";
 import { FollowButton } from "../components/follows/FollowButton";
 import { isLoggedIn } from "../auth/token";
+import { useCurrentUser } from "../auth/useCurrentUser";
 import type { Profile } from "../types/user";
 
 export function DiscoverPage() {
@@ -18,6 +19,7 @@ export function DiscoverPage() {
   const [searched, setSearched] = useState(false);
   const [error, setError] = useState("");
   const loggedIn = isLoggedIn();
+  const me = useCurrentUser();
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -69,7 +71,7 @@ export function DiscoverPage() {
                   <span>@{p.username}</span>
                 </div>
               </Link>
-              {loggedIn && uid && <FollowButton userId={uid} />}
+              {loggedIn && uid && me && uid !== me.id && <FollowButton userId={uid} />}
             </div>
           );
         })}

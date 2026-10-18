@@ -1,11 +1,29 @@
-import { NavLink } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
+
+const tabs = [
+  { key: "posts", label: "Posts" },
+  { key: "likes", label: "Likes" },
+  { key: "comments", label: "Comments" },
+  { key: "replies", label: "Replies" },
+];
+
 export function ProfileTabs() {
+  // NavLink only compares the pathname, so all four ?tab= links appeared
+  // active simultaneously. Compare the query parameter explicitly instead.
+  const [params] = useSearchParams();
+  const active = params.get("tab") || "posts";
   return (
-    <div className="profile-tabs">
-      <NavLink to="?tab=posts">Posts</NavLink>
-      <NavLink to="?tab=likes">Likes</NavLink>
-      <NavLink to="?tab=comments">Comments</NavLink>
-      <NavLink to="?tab=replies">Replies</NavLink>
-    </div>
+    <nav className="profile-tabs" aria-label="Profile activity">
+      {tabs.map(({ key, label }) => (
+        <Link
+          key={key}
+          to={`?tab=${key}`}
+          className={active === key ? "active" : undefined}
+          aria-current={active === key ? "page" : undefined}
+        >
+          {label}
+        </Link>
+      ))}
+    </nav>
   );
 }

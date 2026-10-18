@@ -4,6 +4,10 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    environment:
+      AUTH_DATABASE_URL: sqlite:////app/data/users.db
+    volumes:
+      - auth-data:/app/data
     healthcheck:
       test:
         [
@@ -23,12 +27,15 @@ services:
     env_file:
       - .env
     environment:
+      USER_DATABASE_URL: sqlite:////app/data/profiles.db
       AWS_ENDPOINT_URL: http://localstack:4566
       AWS_REGION: us-east-1
       AWS_ACCESS_KEY_ID: test
       AWS_SECRET_ACCESS_KEY: test
       S3_BUCKET_NAME: cloud-social-platform-media
       PUBLIC_S3_BASE_URL: http://localhost:4566/cloud-social-platform-media
+    volumes:
+      - user-data:/app/data
     healthcheck:
       test:
         [
@@ -47,6 +54,10 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    environment:
+      POST_DATABASE_URL: sqlite:////app/data/posts.db
+    volumes:
+      - post-data:/app/data
     healthcheck:
       test:
         [
@@ -65,6 +76,13 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    environment:
+      LIKE_DATABASE_URL: sqlite:////app/data/likes.db
+    volumes:
+      - like-data:/app/data
+    depends_on:
+      redis:
+        condition: service_healthy
     healthcheck:
       test:
         [
@@ -83,6 +101,10 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    environment:
+      FOLLOW_DATABASE_URL: sqlite:////app/data/follows.db
+    volumes:
+      - follow-data:/app/data
     healthcheck:
       test:
         [
@@ -101,6 +123,13 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    environment:
+      COMMENT_DATABASE_URL: sqlite:////app/data/comments.db
+    volumes:
+      - comment-data:/app/data
+    depends_on:
+      redis:
+        condition: service_healthy
     healthcheck:
       test:
         [
@@ -118,8 +147,6 @@ services:
     image: redis:7-alpine
     container_name: redis
     restart: unless-stopped
-    ports:
-      - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -176,7 +203,7 @@ services:
     build:
       context: ./frontend
       args:
-        VITE_API_BASE_URL: http://localhost:8080
+        VITE_API_BASE_URL: /api
     restart: unless-stopped
     ports:
       - "3000:80"
@@ -235,15 +262,15 @@ services:
       - "4566:4566"
     environment:
       SERVICES: s3
+      S3_BUCKET_NAME: cloud-social-platform-media
       DEBUG: "0"
       AWS_DEFAULT_REGION: us-east-1
       AWS_ACCESS_KEY_ID: test
       AWS_SECRET_ACCESS_KEY: test
-      LOCALSTACK_AUTH_TOKEN: ${LOCALSTACK_AUTH_TOKEN:?LOCALSTACK_AUTH_TOKEN is required}
+      LOCALSTACK_AUTH_TOKEN: ${LOCALSTACK_AUTH_TOKEN:-}
     volumes:
-      - localstack-data:/var/lib/localstack
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ./scripts/localstack/init-s3.sh:/etc/localstack/init/ready.d/init-s3.sh
+      - "localstack-data:/var/lib/localstack"
+      - "./scripts/localstack/init-s3.py:/etc/localstack/init/ready.d/init-s3.py:ro"
     healthcheck:
       test:
         [
@@ -257,6 +284,12 @@ services:
       retries: 10
       start_period: 20s
 volumes:
+  auth-data:
+  user-data:
+  post-data:
+  like-data:
+  follow-data:
+  comment-data:
   prometheus-data:
   grafana-data:
   localstack-data:

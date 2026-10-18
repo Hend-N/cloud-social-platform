@@ -23,6 +23,10 @@ class Base(DeclarativeBase):
     pass
 class Post(Base):
     __tablename__ = "posts"
+    # Never reuse a post_id after deletion. Without this, SQLite hands out
+    # the same id again once the table is empty, and the new post would
+    # inherit comments/likes still keyed to the old post's id.
+    __table_args__ = {"sqlite_autoincrement": True}
 
     post_id: Mapped[int] = mapped_column(
     primary_key=True,
@@ -38,7 +42,7 @@ class Post(Base):
 class CreatePostRequest(BaseModel):
     content: str = Field(min_length=1, max_length=500)
 
-DATABASE_URL = "sqlite:///posts.db"
+DATABASE_URL = os.getenv("POST_DATABASE_URL", "sqlite:///posts.db")
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(bind=engine)
 Base.metadata.create_all(bind=engine)
@@ -61,9 +65,12 @@ def get_current_user_id(
             algorithms=[ALGORITHM]
         )
 
-        return int(payload["sub"])
+        user_id = int(payload["sub"])
+        if user_id <= 0:
+            raise ValueError("invalid user id")
+        return user_id
 
-    except JWTError:
+    except (JWTError, KeyError, TypeError, ValueError):
         raise HTTPException(status_code=401, detail="invalid token")
 
 @app.post("/posts/me")

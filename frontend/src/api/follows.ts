@@ -9,12 +9,8 @@ export const unfollowUser = async (id: number) =>
   (await api.delete(`/follows/${id}`)).data;
 
 export async function checkFollowStatus(id: number) {
-  try {
-    return (await api.get<{ is_following: boolean }>(`/follows/status/${id}`))
-      .data;
-  } catch {
-    return { is_following: false };
-  }
+  return (await api.get<{ is_following: boolean }>(`/follows/status/${id}`))
+    .data;
 }
 
 export async function getFollowStats(id: number): Promise<FollowStats> {

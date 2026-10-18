@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
+import { Avatar } from "../ui/Avatar";
 import type { Comment } from "../../types/comment";
 import {
   likeComment,
@@ -44,12 +46,7 @@ export function CommentItem({
 
   const replies = childrenMap.get(comment.id) ?? [];
   const isOwner = currentUserId != null && comment.user_id === currentUserId;
-  const author =
-    comment.display_name || comment.username
-      ? `${comment.display_name ?? comment.username}${
-          comment.display_name && comment.username ? ` @${comment.username}` : ""
-        }`
-      : `User ID: ${comment.user_id}`;
+  const author = comment.display_name || comment.username || "Unknown author";
 
   // Counts are public; "my reaction" needs a login.
   useEffect(() => {
@@ -114,6 +111,19 @@ export function CommentItem({
   return (
     <div className="comment-thread">
       <div className="comment-card">
+        <div className="comment-identity">
+          <Avatar name={author} src={comment.avatar_url} size="sm" />
+          <div>
+            {comment.username ? (
+              <Link className="comment-profile-link" to={`/profile/${encodeURIComponent(comment.username)}`}>
+                <strong>{author}</strong>
+              </Link>
+            ) : (
+              <strong>{author}</strong>
+            )}
+            {comment.username && <span className="comment-handle">@{comment.username}</span>}
+          </div>
+        </div>
         {editing ? (
           <CommentForm
             initialValue={comment.comment}
@@ -130,7 +140,6 @@ export function CommentItem({
         )}
 
         <div className="comment-footer">
-          <span className="comment-author">{author}</span>
           <div className="comment-tools">
             <button
               type="button"

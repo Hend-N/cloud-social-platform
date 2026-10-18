@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import type { Post } from "../../types/post";
 import type { Comment } from "../../types/comment";
 import { deletePost as removePost, updatePost } from "../../api/posts";
@@ -34,15 +35,11 @@ function time(v?: string) {
 
 export function PostCard({
   post,
-  postId,
-  likeCount,
   likedByMe = false,
   onDeleted,
   onUpdated,
 }: {
   post: Post;
-  postId?: number;
-  likeCount?: number;
   likedByMe?: boolean;
   onDeleted?: (postId: number) => void;
   onUpdated?: (post: Post) => void;
@@ -79,7 +76,7 @@ export function PostCard({
 
   if (!pid) return null;
 
-  const name = post.display_name || post.username || `User ${post.user_id ?? ""}`;
+  const name = post.display_name || post.username || "Unknown author";
 
   async function savePost() {
     const text = draft.trim();
@@ -132,7 +129,13 @@ export function PostCard({
       <header className="post-top">
         <Avatar src={post.avatar_url} name={name} />
         <div className="post-meta">
-          <strong>{name}</strong>
+          {post.username ? (
+            <Link to={`/profile/${encodeURIComponent(post.username)}`} className="post-author-link">
+              <strong>{name}</strong>
+            </Link>
+          ) : (
+            <strong>{name}</strong>
+          )}
           <span>
             {post.username ? `@${post.username}` : ""}
             {time(post.created_at) &&

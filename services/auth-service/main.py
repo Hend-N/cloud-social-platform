@@ -36,7 +36,7 @@ if SECRET_KEY is None:
     raise RuntimeError("SECRET_KEY is missing. Add it to your .env file.")
 ALGORITHM = "HS256"
 
-DATABASE_URL = "sqlite:///users.db"
+DATABASE_URL = os.getenv("AUTH_DATABASE_URL", "sqlite:///users.db")
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(bind=engine)
 Base.metadata.create_all(bind=engine)
@@ -79,7 +79,12 @@ def get_current_user(authorization: str | None = Header(default=None)):
     if payload is None:
         raise HTTPException(status_code=401, detail="invalid token")
 
-    user_id = int(payload["sub"])
+    try:
+        user_id = int(payload["sub"])
+        if user_id <= 0:
+            raise ValueError("invalid user id")
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(status_code=401, detail="invalid token payload")
     session = SessionLocal()
 
     try:

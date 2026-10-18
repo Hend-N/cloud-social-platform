@@ -31,7 +31,7 @@ class Follow(Base):
     follower_id: Mapped[int] = mapped_column()
     following_id: Mapped[int] = mapped_column()
 
-DATABASE_URL = "sqlite:///follows.db"
+DATABASE_URL = os.getenv("FOLLOW_DATABASE_URL", "sqlite:///follows.db")
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(bind=engine)
 Base.metadata.create_all(bind=engine)
@@ -49,8 +49,11 @@ def get_current_user_id(authorization: str | None = Header(default=None)):
             SECRET_KEY,
             algorithms=[ALGORITHM]
         )
-        return int(payload["sub"])
-    except JWTError:
+        user_id = int(payload["sub"])
+        if user_id <= 0:
+            raise ValueError("invalid user id")
+        return user_id
+    except (JWTError, KeyError, TypeError, ValueError):
         raise HTTPException(status_code=401, detail="invalid token")
 
 @app.post("/follows")

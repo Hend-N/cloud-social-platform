@@ -3,16 +3,12 @@ import { useParams } from "react-router-dom";
 
 import { getPostsByUser } from "../api/posts";
 import type { Post } from "../api/posts";
-import { getLikeCount, likePost, unlikePost } from "../api/likes";
-import { createComment, getCommentsForPost } from "../api/comments";
-import type { Comment } from "../api/comments";
 import { getPublicProfile } from "../api/users";
 import type { Profile } from "../api/users";
 
 import { getFollowStats } from "../api/follows";
 import type { FollowStats } from "../api/follows";
 
-import { isLoggedIn } from "../auth/token";
 
 import { PostCard } from "../components/posts/PostCard";
 import { Spinner } from "../components/ui/Spinner";
@@ -26,20 +22,21 @@ function getPostId(post: Post) {
 
 export function UserProfilePage() {
   const { username } = useParams<{ username: string }>();
-  const loggedIn = isLoggedIn();
 
   const [profile, setProfile] = useState<Profile | null>(null);
   const [stats, setStats] = useState<FollowStats>({ followers_count: 0, following_count: 0 });
   const [posts, setPosts] = useState<Post[]>([]);
-  const [likeCounts, setLikeCounts] = useState<Record<number, number>>({});
-  const [commentsByPost, setCommentsByPost] = useState<Record<number, Comment[]>>({});
 
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
 
   useEffect(() => {
     // 1. Strict guard check
-    if (typeof username !== "string" || !username.trim()) return;
+    if (typeof username !== "string" || !username.trim()) {
+      setIsLoading(false);
+      setError("Invalid username.");
+      return;
+    }
 
     // 2. Explicitly typed parameter guarantees 'string' inside the async scope
     async function loadUserData(targetUsername: string) {
@@ -60,26 +57,6 @@ export function UserProfilePage() {
         const userPosts = await getPostsByUser(targetUsername);
         setPosts(userPosts);
 
-        // Fetch Likes & Comments for User Posts
-        const counts: Record<number, number> = {};
-        const commentsMap: Record<number, Comment[]> = {};
-
-        await Promise.all(
-          userPosts.map(async (post) => {
-            const pid = getPostId(post);
-            if (!pid) return;
-            try {
-              counts[pid] = await getLikeCount(pid);
-              commentsMap[pid] = await getCommentsForPost(pid);
-            } catch {
-              counts[pid] = 0;
-              commentsMap[pid] = [];
-            }
-          })
-        );
-
-        setLikeCounts(counts);
-        setCommentsByPost(commentsMap);
       } catch (err) {
         setError("Failed to load user profile.");
       } finally {
@@ -89,42 +66,6 @@ export function UserProfilePage() {
 
     loadUserData(username);
   }, [username]);
-
-  async function handleLike(post: Post) {
-    const pid = getPostId(post);
-    if (!pid) return;
-    try {
-      await likePost(pid);
-      const updatedCount = await getLikeCount(pid);
-      setLikeCounts((prev) => ({ ...prev, [pid]: updatedCount }));
-    } catch {
-      setError("Failed to like post.");
-    }
-  }
-
-  async function handleUnlike(post: Post) {
-    const pid = getPostId(post);
-    if (!pid) return;
-    try {
-      await unlikePost(pid);
-      const updatedCount = await getLikeCount(pid);
-      setLikeCounts((prev) => ({ ...prev, [pid]: updatedCount }));
-    } catch {
-      setError("Failed to unlike post.");
-    }
-  }
-
-  async function handleAddComment(post: Post, text: string) {
-    const pid = getPostId(post);
-    if (!pid) return;
-    try {
-      await createComment(pid, text);
-      const updatedComments = await getCommentsForPost(pid);
-      setCommentsByPost((prev) => ({ ...prev, [pid]: updatedComments }));
-    } catch {
-      setError("Failed to add comment.");
-    }
-  }
 
   if (isLoading) return <Spinner size="lg" />;
 
@@ -172,11 +113,9 @@ export function UserProfilePage() {
         posts.map((post) => {
           const pid = getPostId(post);
           if (!pid) return null;
-          <PostCard
+          return <PostCard
             key={pid}
             post={post}
-            postId={pid}
-            likeCount={likeCounts[pid]}
             likedByMe={false}   // optional
             onDeleted={(id) => {
               setPosts((prev) => prev.filter((p) => getPostId(p) !== id));

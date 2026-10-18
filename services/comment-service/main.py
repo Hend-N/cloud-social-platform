@@ -14,10 +14,14 @@ SECRET_KEY = os.getenv("SECRET_KEY")
 if SECRET_KEY is None:
     raise RuntimeError("SECRET_KEY is missing. Add it to your .env file.")
 
+INTERNAL_SERVICE_SECRET = os.getenv("INTERNAL_SERVICE_SECRET")
+if INTERNAL_SERVICE_SECRET is None:
+    raise RuntimeError("INTERNAL_SERVICE_SECRET is missing.")
+
 ALGORITHM = "HS256"
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
 
-redis_client = redis.Redis(host=REDIS_HOST)
+redis_client = redis.Redis(host=REDIS_HOST, socket_connect_timeout=2, socket_timeout=2)
 
 app = FastAPI(title="Comment Service")
 
@@ -34,7 +38,7 @@ class Comment(Base):
     parent_comment_id: Mapped[int | None] = mapped_column(nullable=True)
     comment: Mapped[str] = mapped_column(String(300))
 
-DATABASE_URL = "sqlite:///comments.db"
+DATABASE_URL = os.getenv("COMMENT_DATABASE_URL", "sqlite:///comments.db")
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(bind=engine)
 Base.metadata.create_all(bind=engine)
@@ -56,9 +60,16 @@ def get_current_user_id(authorization: str | None = Header(default=None)):
     token = authorization.split(" ")[1]
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        return int(payload["sub"])
-    except JWTError:
+        user_id = int(payload["sub"])
+        if user_id <= 0:
+            raise ValueError("invalid user id")
+        return user_id
+    except (JWTError, KeyError, TypeError, ValueError):
         raise HTTPException(status_code=401, detail="invalid token")
+
+def verify_internal_service(x_internal_service_secret: str | None = Header(default=None)):
+    if x_internal_service_secret != INTERNAL_SERVICE_SECRET:
+        raise HTTPException(status_code=403, detail="invalid internal service credentials")
 
 @app.post("/comments")
 def create_comment(request: CreateCommentRequest, user_id: int = Depends(get_current_user_id)):
@@ -155,6 +166,29 @@ def delete_comment(comment_id: int, user_id: int = Depends(get_current_user_id))
             print(f"Failed to publish event to Redis: {e}")
 
         return {"detail": "comment deleted", "deleted_ids": comment_ids}
+
+@app.delete("/comments/post/{post_id}")
+def delete_comments_for_post(post_id: int, _: None = Depends(verify_internal_service)):
+    """
+    Internal only (gateway -> comment-service). Removes every comment and
+    reply belonging to a deleted post and announces the deleted ids so the
+    like-service can drop their reactions.
+    """
+    with SessionLocal() as session:
+        comments = session.query(Comment).filter(Comment.post_id == post_id).all()
+        deleted_ids = [c.id for c in comments]
+        for item in comments:
+            session.delete(item)
+        session.commit()
+
+    if deleted_ids:
+        try:
+            event_data = {"event_type": "COMMENTS_DELETED", "deleted_ids": deleted_ids}
+            redis_client.publish("comment_events", json.dumps(event_data))
+        except Exception as e:
+            print(f"Failed to publish event to Redis: {e}")
+
+    return {"detail": "comments deleted", "deleted_ids": deleted_ids}
 
 @app.put("/comments/{comment_id}")
 def update_comment(

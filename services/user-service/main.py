@@ -1,10 +1,11 @@
 import os
 import uuid
+import asyncio
 import boto3
 from fastapi import FastAPI, Header, HTTPException, Depends, UploadFile, File
 from pydantic import BaseModel, Field
 from jose import jwt, JWTError
-from sqlalchemy import create_engine, String, text
+from sqlalchemy import create_engine, String, text, func, or_
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 from dotenv import load_dotenv
 
@@ -63,7 +64,7 @@ class UpdateProfileRequest(BaseModel):
     bio: str | None = Field(default=None, max_length=200)
 
 
-DATABASE_URL = "sqlite:///profiles.db"
+DATABASE_URL = os.getenv("USER_DATABASE_URL", "sqlite:///profiles.db")
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(bind=engine)
 Base.metadata.create_all(bind=engine)
@@ -111,24 +112,20 @@ def get_current_user_data(
 
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id = int(payload["sub"])
+        if user_id <= 0:
+            raise ValueError("invalid user id")
         return {
-            "user_id": int(payload["sub"]),
+            "user_id": user_id,
             "username": payload.get("username", "")
         }
-    except (JWTError, KeyError):
+    except (JWTError, KeyError, TypeError, ValueError):
         raise HTTPException(status_code=401, detail="invalid token")
 
 
-from pydantic import BaseModel
-from typing import Optional
-
-class ProfileCreate(BaseModel):
-    display_name: str
-    bio: Optional[str] = ""
-
 @app.post("/profiles/me")
 def create_profile(
-    data: ProfileCreate, 
+    data: CreateProfileRequest,
     current_user: dict = Depends(get_current_user_data) # your auth dependency
 ):
     with SessionLocal() as session:
@@ -178,11 +175,16 @@ def search_profiles(q: str):
     if not q or not q.strip():
         return []
 
-    search_term = f"%{q.strip()}%"
+    # Treat search input as a literal substring, not a SQL LIKE wildcard.
+    escaped = q.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    search_term = f"%{escaped}%"
 
     with SessionLocal() as session:
         results = session.query(Profile).filter(
-            Profile.username.ilike(search_term)
+            or_(
+                Profile.username.ilike(search_term, escape="\\"),
+                Profile.display_name.ilike(search_term, escape="\\"),
+            )
         ).limit(20).all()
 
         return [serialize_profile(p) for p in results]
@@ -191,7 +193,7 @@ def search_profiles(q: str):
 def get_profile(username: str):
     with SessionLocal() as session:
         existing_profile = session.query(Profile).filter(
-            Profile.username.ilike(username)  # Case-insensitive match
+            func.lower(Profile.username) == username.lower()  # literal case-insensitive match
         ).first()
 
         if existing_profile is None:
@@ -248,49 +250,54 @@ async def upload_avatar(
 ):
 
     user_id = current_user["user_id"]
-    allowed_content_types = {"image/png", "image/jpeg", "image/webp", "image/gif"}
+    allowed_types = {
+        "image/png": ("png", lambda data: data.startswith(b"\x89PNG\r\n\x1a\n")),
+        "image/jpeg": ("jpg", lambda data: data.startswith(b"\xff\xd8\xff")),
+        "image/webp": ("webp", lambda data: data.startswith(b"RIFF") and data[8:12] == b"WEBP"),
+        "image/gif": ("gif", lambda data: data.startswith((b"GIF87a", b"GIF89a"))),
+    }
+    accepted = allowed_types.get(avatar.content_type or "")
+    if accepted is None:
+        raise HTTPException(status_code=400, detail="unsupported avatar image format")
 
-    if avatar.content_type not in allowed_content_types:
-        raise HTTPException(
-            status_code=400,
-            detail="avatar must be a PNG, JPEG, WEBP, or GIF image"
-        )
-
-    file_bytes = await avatar.read()
+    # Read at most the limit + 1 byte, regardless of a client's Content-Length.
+    file_bytes = await avatar.read(2 * 1024 * 1024 + 1)
     if len(file_bytes) > 2 * 1024 * 1024:
-        raise HTTPException(status_code=413, detail="avatar must be smaller than 2MB")
+        raise HTTPException(status_code=413, detail="avatar must be at most 2 MB")
+    extension, valid_signature = accepted
+    if not valid_signature(file_bytes):
+        raise HTTPException(status_code=400, detail="file content does not match image type")
 
-    file_extension = avatar.filename.rsplit(".", 1)[-1].lower()
-    object_key = f"avatars/user-{user_id}/{uuid.uuid4()}.{file_extension}"
+    # Avoid writing an orphaned S3 object for a user without a profile.
+    with SessionLocal() as session:
+        if session.query(Profile).filter(Profile.user_id == user_id).first() is None:
+            raise HTTPException(status_code=404, detail="profile not found")
 
-    s3_client = get_s3_client()
-    try:
-        s3_client.put_object(
+    object_key = f"avatars/user-{user_id}/{uuid.uuid4()}.{extension}"
+
+    def store_object():
+        get_s3_client().put_object(
             Bucket=S3_BUCKET_NAME,
             Key=object_key,
             Body=file_bytes,
             ContentType=avatar.content_type,
         )
-    except Exception as error:
-        raise HTTPException(
-            status_code=500,
-            detail=f"failed to upload avatar: {str(error)}"
-        )
 
-    avatar_url = f"{PUBLIC_S3_BASE_URL}/{object_key}"
+    try:
+        # boto3 is synchronous; moving the network call off the event loop
+        # allows other API requests to proceed during S3 I/O.
+        await asyncio.to_thread(store_object)
+    except Exception:
+        raise HTTPException(status_code=503, detail="avatar storage is unavailable")
 
+    avatar_url = f"{PUBLIC_S3_BASE_URL.rstrip('/')}/{object_key}"
     with SessionLocal() as session:
-        existing_profile = session.query(Profile).filter(
-            Profile.user_id == user_id
-        ).first()
-
+        existing_profile = session.query(Profile).filter(Profile.user_id == user_id).first()
         if existing_profile is None:
             raise HTTPException(status_code=404, detail="profile not found")
-
         existing_profile.avatar_url = avatar_url
         session.commit()
         session.refresh(existing_profile)
-
         return serialize_profile(existing_profile)
 
 

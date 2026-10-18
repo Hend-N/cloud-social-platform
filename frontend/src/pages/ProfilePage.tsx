@@ -5,12 +5,12 @@ import { getUserPosts } from "../api/posts";
 import { getFollowStats } from "../api/follows";
 import { getMyLikedPostIds } from "../api/likes";
 import { ProfileHeader } from "../components/profile/ProfileHeader";
-import { ProfileTabs } from "../components/profile/ProfileTabs";
 import { ProfilePosts } from "../components/profile/ProfilePosts";
 import { Spinner } from "../components/ui/Spinner";
 import { ErrorMessage } from "../components/ui/ErrorMessage";
 import { getApiErrorMessage } from "../api/errors";
 import { isLoggedIn } from "../auth/token";
+import { useCurrentUser } from "../auth/useCurrentUser";
 import type { Profile } from "../types/user";
 import type { FollowStats } from "../types/follow";
 import type { Post } from "../types/post";
@@ -27,6 +27,17 @@ export function ProfilePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const loggedIn = isLoggedIn();
+  const me = useCurrentUser();
+  const profileUserId = profile?.user_id;
+  const showFollow = loggedIn && me != null && profileUserId != null && me.id !== profileUserId;
+  const refreshStats = async () => {
+    if (!profileUserId) return;
+    try {
+      setStats(await getFollowStats(profileUserId));
+    } catch {
+      // Keep the last known counts; following action itself shows its errors.
+    }
+  };
 
   useEffect(() => {
     if (!username) return;
@@ -71,8 +82,13 @@ export function ProfilePage() {
 
   return (
     <div className="profile-page">
-      <ProfileHeader profile={profile} stats={stats} isOwn={false} />
-      <ProfileTabs />
+      <ProfileHeader
+        profile={profile}
+        stats={stats}
+        isOwn={false}
+        onFollow={showFollow ? refreshStats : undefined}
+      />
+      <h2 className="profile-section-title">Posts</h2>
       <ProfilePosts
         posts={posts}
         likedPostIds={likedPostIds}

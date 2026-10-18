@@ -50,13 +50,13 @@ export function EditProfile({
         label="Bio"
         value={bio}
         onChange={(e) => setBio(e.target.value)}
-        maxLength={280}
+        maxLength={200}
       />
       <label className="field">
         <span>Avatar</span>
         <input
           type="file"
-          accept="image/*"
+          accept="image/png,image/jpeg,image/webp,image/gif"
           onChange={(e) => setAvatar(e.target.files?.[0] ?? null)}
         />
       </label>

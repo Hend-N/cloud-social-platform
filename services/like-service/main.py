@@ -1,6 +1,8 @@
 import os
 import json
 import threading
+import time
+import logging
 import redis
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Header, Depends, Body
@@ -49,7 +51,7 @@ class CommentReaction(Base):
     comment_id: Mapped[int] = mapped_column()
     reaction: Mapped[str] = mapped_column(String(10))
 
-DATABASE_URL = "sqlite:///likes.db"
+DATABASE_URL = os.getenv("LIKE_DATABASE_URL", "sqlite:///likes.db")
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(bind=engine)
 Base.metadata.create_all(bind=engine)
@@ -63,34 +65,52 @@ def get_current_user_id(authorization: str | None = Header(default=None)):
     token = authorization.split(" ")[1]
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        return int(payload["sub"])
-    except JWTError:
+        user_id = int(payload["sub"])
+        if user_id <= 0:
+            raise ValueError("invalid user id")
+        return user_id
+    except (JWTError, KeyError, TypeError, ValueError):
         raise HTTPException(status_code=401, detail="invalid token")
 
 def verify_internal_service(x_internal_service_secret: str | None = Header(default=None)):
     if x_internal_service_secret != INTERNAL_SERVICE_SECRET:
         raise HTTPException(status_code=403, detail="invalid internal service credentials")
 
-# Redis Background Listener
+# The listener must reconnect if Redis is not yet available at startup or
+# disconnects while the service is running. Pub/sub events are still not durable.
 def listen_for_events():
-    redis_sub = redis.Redis(host=REDIS_HOST)
-    pubsub = redis_sub.pubsub()
-    pubsub.subscribe("comment_events")
-
-    for message in pubsub.listen():
-        if message["type"] == "message":
-            try:
-                data = json.loads(message["data"])
-                if data.get("event_type") == "COMMENTS_DELETED":
-                    comment_ids = data.get("deleted_ids", [])
-                    if comment_ids:
-                        with SessionLocal() as session:
-                            session.query(CommentReaction).filter(
-                                CommentReaction.comment_id.in_(comment_ids)
-                            ).delete(synchronize_session=False)
-                            session.commit()
-            except Exception as e:
-                print(f"Error processing Redis message: {e}")
+    while True:
+        connection = None
+        pubsub = None
+        try:
+            connection = redis.Redis(host=REDIS_HOST, socket_connect_timeout=2)
+            pubsub = connection.pubsub()
+            pubsub.subscribe("comment_events")
+            for message in pubsub.listen():
+                if message["type"] != "message":
+                    continue
+                try:
+                    data = json.loads(message["data"])
+                    if data.get("event_type") == "COMMENTS_DELETED":
+                        comment_ids = data.get("deleted_ids", [])
+                        if comment_ids:
+                            with SessionLocal() as session:
+                                session.query(CommentReaction).filter(
+                                    CommentReaction.comment_id.in_(comment_ids)
+                                ).delete(synchronize_session=False)
+                                session.commit()
+                except (ValueError, TypeError, KeyError):
+                    logging.warning("Ignoring invalid comment deletion event")
+                except Exception:
+                    logging.exception("Failed processing comment deletion event")
+        except (redis.RedisError, OSError):
+            logging.warning("Redis comment event listener disconnected; reconnecting")
+        finally:
+            if pubsub is not None:
+                pubsub.close()
+            if connection is not None:
+                connection.close()
+        time.sleep(2)
 
 @app.on_event("startup")
 def startup_event():
@@ -157,6 +177,16 @@ def unlike(post_id: int, user_id: int = Depends(get_current_user_id)):
         session.delete(existing_like)
         session.commit()
         return {"message": "Post unliked successfully", "liked": False}
+
+@app.delete("/likes/posts/{post_id}/all")
+def delete_all_likes_for_post(post_id: int, _: None = Depends(verify_internal_service)):
+    """Internal only: remove every like on a deleted post (any user)."""
+    with SessionLocal() as session:
+        deleted_count = session.query(Like).filter(
+            Like.post_id == post_id
+        ).delete(synchronize_session=False)
+        session.commit()
+        return {"deleted_count": deleted_count}
 
 @app.get("/likes/posts/{post_id}/count")
 def get_like_count(post_id: int):

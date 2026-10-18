@@ -25,3 +25,10 @@ build/
 
 .vscode/
 .idea/
+
+# Environment variables and secrets
+**/.env
+**/.env.*
+
+# Allow safe configuration templates
+!**/.env.example
