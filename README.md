@@ -1,8 +1,8 @@
 # Cloud Social Platform
 
-A development-stage social network built as six Python/FastAPI services behind an API gateway, with a React + TypeScript frontend. Users can register, sign in, manage profiles, publish/edit/delete posts, follow other users, and comment/react to content. The gateway handles JWT checks, routing, rate limits, request limits, circuit breakers, basic enrichment, observability, and best-effort cross-service deletion cleanup.
+A **learning-focused, Docker-based social networking application** built with six Python/FastAPI microservices behind an API gateway and a React + TypeScript frontend. It demonstrates service separation, HTTP APIs, JWT authentication, database-per-service persistence, asynchronous messaging, container orchestration, observability, and automated CI/CD. Users can register, sign in, manage profiles, create and edit posts, follow accounts, comment, and react to content. The gateway handles JWT checks, routing, rate limits, request limits, circuit breakers, basic response enrichment, metrics, and best-effort cross-service deletion cleanup.
 
-**Status:** Source-level repairs and checks are included in this repository. The full Docker stack has **not** been verified in this audit environment; see [Testing](#14-testing-and-quality-assurance) and [Known issues](#18-known-issues-and-limitations). This is a learning/development system, **not a production-ready social network**.
+**Project status — educational/development environment:** The repository now has **passing GitHub Actions CI and Docker image publishing workflows** (as reported for the latest updates). CI checks the frontend build, Python source and regression tests, Docker Compose configuration, stack startup, and an integration script. The publishing workflow builds and pushes container images to GitHub Container Registry. **Publishing images is not deployment to a running production server.** This project is for learning and experimentation, **not a production-ready or publicly hosted social network**. See [Testing](#14-testing-and-quality-assurance), [CI/CD](#15-cicd-automation), and [Known limitations](#19-known-issues-and-limitations).
 
 ## 1. Overview and features
 
@@ -16,7 +16,7 @@ A development-stage social network built as six Python/FastAPI services behind a
 | Follow/unfollow, follower lists/counts | Implemented | `follow-service` |
 | Comments, nested replies, editing and deleting comment branches | Implemented | `comment-service` |
 | Cascade deletion of related comments/likes | Best-effort, partial failure possible | gateway, comments, likes, Redis |
-| Monitoring (Prometheus/Grafana) | Configured, not independently deployment-tested in this audit | gateway + monitoring containers |
+| Monitoring (Prometheus/Grafana) | Included in the Compose development stack; dashboards/alerting are learning features | gateway + monitoring containers |
 | Refresh tokens, notifications, chat, granular roles, moderation | Not implemented | — |
 
 ## 2. Architecture
@@ -50,14 +50,15 @@ Every service owns a separate SQLite database and **does not query another servi
 ## 3. Stack and project layout
 
 - Python **3.13** Docker images; FastAPI, Uvicorn, SQLAlchemy and SQLite, `python-jose`, Passlib/bcrypt, Pydantic; `httpx` in the gateway, `redis` in gateway/likes/comments, `boto3` in the user service.
-- React **18**, TypeScript, Vite **5**, React Router **6**, Axios; production frontend served by Nginx.
+- React **18**, TypeScript, **Vite 7.3.7** (confirmed in the successful local frontend build), React Router **6**, Axios; built frontend served by Nginx in the container.
 - Docker Compose, Redis **7**; Prometheus (image currently `latest`), Grafana **12.0.2**; optional LocalStack (currently `latest`). The unpinned backend packages will resolve to versions available at image-build time; refer to individual `requirements.txt` files and the frontend lockfile for details.
 
 ```text
 cloud-social-platform/
-├── docker-compose.yml             # service orchestration and persistent volumes
+├── docker-compose.yml             # services, health checks, volumes, db-volume-init
 ├── .env.example                   # root configuration template (never commit .env)
-├── README.md, AUDIT_REPORT.md
+├── README.md, AUDIT_REPORT.md     # project guide and historical repair notes
+├── .github/workflows/              # ci.yml and docker-images.yml
 ├── gateway/                       # routing, auth, limits, metrics, resilience
 │   ├── main.py
 │   ├── requirements.txt
@@ -81,7 +82,7 @@ cloud-social-platform/
 ├── observability/
 │   ├── prometheus/prometheus.yml
 │   └── grafana/                   # provisioning and dashboards
-├── scripts/localstack/init-s3.sh  # development S3 bucket init
+├── scripts/localstack/init-s3.py  # development S3 bucket init (Windows-safe)
 ├── tests/                         # independent source tests and API regression tests
 ├── test_*.sh                      # Docker-backed functional/operational checks
 ├── diagnose.sh
@@ -92,17 +93,24 @@ cloud-social-platform/
 
 - Docker Engine/Desktop with Compose v2, accessible on your computer. The Compose examples assume ports 3000, 8080, 3001 and 9090 are unused; port 4566 is additionally needed when using LocalStack.
 - For standalone development: **Python 3.13**, **Node.js 22**, npm, and optionally a running Redis server. For avatar uploads, you must also start/configure an S3-compatible service.
-- Disk space for container images and six SQLite named volumes. Size will grow with users/content.
+- Disk space for Docker images and six SQLite named volumes. The volumes persist across ordinary container restarts.
+- To run the `.sh` integration scripts on Windows, use Git Bash or WSL. Docker Desktop with Linux containers must be running.
 
 ## 5. First-time Docker setup
 
-Run from the **repository root**:
+Run from the **repository root** to create your **local** configuration file:
+
+```powershell
+# Windows PowerShell
+Copy-Item .env.example .env
+```
 
 ```bash
+# Git Bash, WSL, Linux or macOS
 cp .env.example .env
 ```
 
-Edit `.env` and replace `SECRET_KEY`, `INTERNAL_SERVICE_SECRET` and `GRAFANA_ADMIN_PASSWORD` with **different, cryptographically random strings**. For example, generate each secret separately with `python -c "import secrets; print(secrets.token_urlsafe(48))"`. Do not expose or commit `.env`. The two service secrets must be the same *across containers* through the common root `.env` file, but **different from each other**.
+Edit `.env` and set **different random values** for `SECRET_KEY` (JWT signing), `INTERNAL_SERVICE_SECRET` (trusted service-to-service calls), and `GRAFANA_ADMIN_PASSWORD`. Generate each separately, for example with `python -c "import secrets; print(secrets.token_urlsafe(48))"`. **Do not commit, share, or paste the real `.env` file or its secret values.** Each microservice and the gateway need the **same shared `SECRET_KEY` and `INTERNAL_SERVICE_SECRET`** across that particular Compose stack, while those **two keys must differ from each other**. CI generates separate disposable secrets on GitHub-hosted runners; your local `.env` is not uploaded to GitHub.
 
 ```bash
 docker compose config         # check interpolation and syntax
@@ -111,13 +119,17 @@ docker compose ps             # inspect state / health
 curl http://localhost:8080/health
 ```
 
-Open **http://localhost:3000** (frontend). Default containers include the gateway and six APIs, Redis, Prometheus and Grafana. **Avatar uploads will not function until S3/LocalStack is started.** To opt into development S3, configure a working `LOCALSTACK_AUTH_TOKEN` if your chosen image/version requires one, then run:
+Open **http://localhost:3000** (frontend). Default containers include the gateway, six APIs, Redis, Prometheus and Grafana. Docker Compose also starts a one-shot `db-volume-init` container **before the six database-backed API services**, which ensures the SQLite data volumes are writable by the non-root service user. It should finish successfully with **exit code 0**; it is not a long-running microservice.
+
+Check it with `docker compose ps -a` and `docker compose logs db-volume-init`. All six database services depend on `db-volume-init` completing successfully; the gateway waits for healthy upstreams. This prevents the `sqlite3.OperationalError: unable to open database file` failure seen on new Docker volumes.
+
+**Avatar uploads will not function until S3/LocalStack is started.** To opt into development S3, obtain a `LOCALSTACK_AUTH_TOKEN` from LocalStack and add it to the root `.env` (required by the current 2026 image), then run:
 
 ```bash
 docker compose --profile localstack up -d --build
 ```
 
-The LocalStack ready script initializes the bucket and grants **development-only** read access to `avatars/*`. Do not carry that public-read bucket policy into production. LocalStack may require an account/token depending on its release; the `latest` image is not reproducible across time.
+The LocalStack Python ready hook initializes the bucket (unlike a shell hook, it does not depend on executable file permissions after Windows ZIP extraction). The LocalStack health check waits until that bucket exists. Check `docker compose logs localstack` and `docker compose exec localstack awslocal s3api head-bucket --bucket cloud-social-platform-media` if uploads report 503. The User Service logs the actual storage exception without returning its details to browsers. The ready hook also grants **development-only** read access to `avatars/*`. Do not carry that public-read bucket policy into production. Current LocalStack 2026 images require an account/token; the `latest` image is not reproducible across time.
 
 ### Ports and URLs
 
@@ -144,7 +156,7 @@ docker compose down                # stops containers, KEEPS database volumes
 docker compose up -d --build      # recreate containers with the same data volumes
 ```
 
-**Data safety:** `docker compose down -v` **removes the database volumes** and can permanently delete user data. Do not run it for routine troubleshooting. Take volume/database backups first. For consistent SQLite backups use SQLite's backup API or `sqlite3 .backup` while writes are quiesced; do not simply overwrite a live database file. Schema setup uses SQLAlchemy `metadata.create_all()`, with a small legacy `avatar_url` ALTER TABLE in the profile service. **No general migration framework is implemented.**
+**Resetting local learning data:** If you do not need your development SQLite data, `docker compose down -v` removes the Compose-managed named volumes (including the six SQLite databases and monitoring data), and `docker compose up -d --build` starts a fresh stack. **This is destructive and optional.** Use `docker compose down` without `-v` when you want to keep data. Back up any data you care about before resetting. For consistent SQLite backups use SQLite's backup API or `sqlite3 .backup` while writes are quiesced. Schema setup uses SQLAlchemy `metadata.create_all()`, with a small legacy `avatar_url` ALTER TABLE in the profile service. **No general migration framework is implemented.**
 
 ### Standalone backend and Vite development
 
@@ -169,7 +181,7 @@ The default frontend dev API base is `/api`; `vite.config.ts` proxies it to **ht
 
 ## 7. Configuration reference
 
-Variables in `.env` are made available to Python services and the gateway via `env_file`. The per-service SQLite URLs and the gateway's Compose networking values are provided by `docker-compose.yml` as explicit overrides. An unset optional variable uses the **source-code default** shown below; an empty string is not necessarily equivalent to unset.
+Variables in the **local root `.env`** are made available to Python services and the gateway via Compose `env_file`. The per-service SQLite URLs and gateway network addresses are explicit Compose overrides. `INTERNAL_SERVICE_SECRET` and `SECRET_KEY` must be present and identical across consumers in the same stack. **On GitHub Actions, `.github/workflows/ci.yml` creates temporary `.env` files on the runner**; it does not depend on the local, Git-ignored `.env`. An unset optional variable may use a source-code default; an empty string is not necessarily equivalent to unset.
 
 | Variable(s) | Consumers | Purpose / default / requirement |
 |---|---|---|
@@ -199,7 +211,7 @@ Variables in `.env` are made available to Python services and the gateway via `e
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | user | Defaults `test` for local development, **not production credentials** |
 | `S3_BUCKET_NAME` | user, LocalStack init | Default `cloud-social-platform-media` |
 | `PUBLIC_S3_BASE_URL` | user | Browser-reachable object URL prefix; development default `http://localhost:4566/<bucket>` |
-| `LOCALSTACK_AUTH_TOKEN` | optional LocalStack | No usable default; may be required by image vendor/version |
+| `LOCALSTACK_AUTH_TOKEN` | optional LocalStack profile | Required by current LocalStack 2026 images even for free non-commercial use; set privately in root `.env` |
 | `GRAFANA_ADMIN_USER`, `GRAFANA_ADMIN_PASSWORD` | Grafana Compose | Set in `.env`; sample user `admin`, password **must be changed** |
 | `VITE_API_BASE_URL` | frontend build/dev | `/api` for Vite dev proxy or absolute gateway host; Docker build arg uses `/api` for the Nginx same-origin proxy |
 
@@ -414,37 +426,65 @@ cd ..
 ./test_circuit_breaker.sh
 ```
 
-`tests/test_static_contracts.py` checks source syntax, Compose/database ownership, gateway secret handling and frontend contract alignment without external services. `tests/test_service_integration.py` uses temporary SQLite files and real FastAPI TestClients for authentication/profiles/posts/follows/comments; it skips if Python dependencies are not installed, and does **not** assert a live Docker stack is healthy. The shell tests expect Docker/gateway/Redis to be available and may exercise/delete test content, so use a disposable development stack. CI builds frontend images, checks syntax, runs Python regression tests, validates Compose, starts the default stack, and invokes `test_all_services.sh`.
+`tests/test_static_contracts.py` checks source syntax, Compose/database ownership, gateway secret handling and frontend contract alignment without external services. `tests/test_service_integration.py` uses temporary SQLite files and FastAPI TestClients for authentication/profiles/posts/follows/comments; it skips if dependencies are unavailable and **does not by itself prove the full Docker stack is healthy**. The shell tests expect the gateway and other containers to be running and may create/delete test content, so use a disposable development stack.
 
-**Audit-environment outcomes** (see `AUDIT_REPORT.md`): Python source compile **pass**; TypeScript `tsc -b` against source using extracted uploaded dependencies **pass**; YAML parse **pass**; eight shell syntax checks **pass**; independent Python regression suite **10 pass, 3 skipped** because service Python requirements are missing in the audit environment. Vite bundle/build and Docker Compose container start **not verified** due the uploaded Windows-only native Node modules and absence of Docker/network access.
+**Current verification status:** The most recent user-confirmed **CI and Docker image publishing workflows are both passing**. The frontend also completed `npm ci` and `npm run build` locally with Vite 7.3.7. The CI job runs Python regression tests, validates the Compose file and injected secrets, builds and starts the Docker stack, waits for the gateway/frontend, and runs `test_all_services.sh`. A passing workflow confirms **those configured checks** at that commit; it does not establish browser E2E coverage, production availability, or security certification. The older results in `AUDIT_REPORT.md` are historical snapshots, not the current pipeline status.
 
-## 15. Troubleshooting
+## 15. CI/CD automation
+
+This project uses **GitHub Actions as a learning exercise** in build verification and container image publishing. Both workflow files are under `.github/workflows/`.
+
+| Workflow | Trigger | What it verifies or produces |
+|---|---|---|
+| **CI** (`ci.yml`) | Push to `main` and pull requests | Installs frontend dependencies, builds React/TypeScript, checks Python syntax, creates disposable test-only `.env` files, validates Compose and shared service secrets, installs Python test dependencies, runs regression tests, builds and starts the Compose stack, waits for readiness, and runs `test_all_services.sh` |
+| **Build and Publish Docker Images** (`docker-images.yml`) | Push to `main` | Builds the frontend, gateway, and six backend service images, then publishes images to **GitHub Container Registry (GHCR)** using the workflow's `GITHUB_TOKEN`; image tags include the commit SHA and `latest` |
+
+### How secrets work in CI
+
+- Your **local `.env` is intentionally excluded from Git** and does not exist on a GitHub-hosted runner.
+- The CI workflow generates **new random** `SECRET_KEY`, `INTERNAL_SERVICE_SECRET`, and Grafana password values for its temporary environment. You **do not need to copy your local JWT secret into GitHub repository secrets to run CI**.
+- Each backend service and the gateway must receive the same two shared secrets *within a CI run*. The Compose verification step checks these values without printing them.
+- Publishing to GHCR uses GitHub Actions' provided `GITHUB_TOKEN` with package-write permission; it does not require putting a personal access token in `.env` for this workflow.
+- For a future real deployment, store persistent environment-specific credentials in that deployment environment or its secret manager. **Never use CI's ephemeral keys as production secrets.**
+
+### Docker startup order
+
+The Compose stack declares a one-shot **`db-volume-init`** service. It runs as root only long enough to set ownership of the six named SQLite volumes for `appuser:appgroup`, then exits. Each database-backed service waits for `service_completed_successfully`; services themselves run as non-root users. The gateway waits for its upstream services to become healthy. This startup dependency is essential on fresh Linux runners where newly created Docker volumes may initially be root-owned.
+
+### What passing workflows mean
+
+**Passing CI** means the configured build, regression, Compose/startup, and integration checks completed for that run. **Passing image publishing** means the workflow built and pushed container images. **Neither workflow by itself deploys the app to a live website.** The repository remains a local/educational project, with optional future deployment exercises.
+
+## 16. Troubleshooting
 
 | Symptom | Check / action |
 |---|---|
 | Gateway or service unhealthy | `docker compose ps`; `docker compose logs --tail=100 gateway` or specific service; check `.env` secret values |
-| Database error/permission denied | Ensure SQLite named volume mounts `/app/data` and Dockerfile creates this path with ownership for `appuser` |
+| `sqlite3.OperationalError: unable to open database file` | Verify `db-volume-init` exists in Compose, exits with code 0 and precedes the six database services; check `/app/data` mounts and `appuser` ownership. For expendable local data only, `docker compose down -v` resets volumes |
 | Login fails or shows 401 | Check `/api/auth/login`, JWT expiration (30m), shared `SECRET_KEY`, token storage and bearer header |
 | Comment/like cleanup incomplete | Inspect Redis, gateway and comments/likes logs; asynchronous cleanup can fail (known limitation) |
 | Browser shows `Network Error` | Check gateway on `:8080`, `VITE_API_BASE_URL`, CORS and actual status in developer tools |
 | Empty/broken frontend build | Reinstall platform-specific packages with `npm ci`; don't copy Windows `node_modules` into Linux Docker |
+| Linux CI reports `Cannot find module ProfileComments` | Match the exact file casing in imports and Git tracking; Windows often ignores casing differences, while Linux does not. Use `git mv` via a temporary filename when needed |
+| CI reports `.env not found` or missing `INTERNAL_SERVICE_SECRET` | Ensure the CI environment-creation step runs before Compose, and that `env_file: .env` applies to all backend services and gateway; do not commit your local `.env` |
+| CI reports `db-volume-init` missing | Update `docker-compose.yml` with the one-shot initializer and six `service_completed_successfully` dependencies; this is a Compose configuration mismatch, not a GitHub secret issue |
 | Uploaded avatar fails with 503 | Start LocalStack profile, check account/token if required, bucket initialization, S3 endpoint and permissions |
 | Avatar rejected at 413 | 2 MiB file limit and gateway request-size env. `.env.example` uses 3 MiB request limit |
 | Prometheus shows no targets | Check service `gateway:8000`, network, gateway health and scrape config |
 | Ports already occupied | Adjust Compose host-side port mappings or stop conflicting local servers |
 | Shell tests show `^M` errors | Test scripts in this repair are normalized to Unix LF; avoid converting back to CRLF |
 
-## 16. Development guidelines
+## 17. Development guidelines
 
 Keep one service responsible for each dataset. To add a route, update its service and the gateway **public/protected allowlist** in `gateway/main.py`, then update the matching Axios API function and regression tests. When changing schemas, write a migration plan and preserve existing rows; `create_all()` does not evolve all existing tables. To add configuration, declare it with a tested fallback/required check, update `.env.example`, Docker Compose overrides, and this reference. New services need health checks, timeout/error handling, a distinct persistence volume and backend contract tests. Avoid importing one service's ORM model inside another service. Standardize HTTP status codes and log error context without secrets.
 
-## 17. Deployment / operational hardening
+## 18. Deployment / operational hardening
 
-The Compose file is a **local development configuration**. Before deploying publicly: terminate TLS at a trusted ingress, restrict gateway/monitoring access, store secrets externally and rotate them, make Redis private/authenticated, replace SQLite where write concurrency/scale requires it, implement durable migrations and backup/restore tests, use private S3 objects with scoped credentials and signed URLs, pin Docker images and Python dependencies, introduce durable event processing and distributed observability, add threat modeling/rate limits for user-generated content, and implement account deletion/privacy retention policies. Plan explicit disaster recovery, uptime alerts and background job reconciliation.
+This repository is intentionally a **local learning environment**, not an enterprise deployment blueprint. If the project is eventually used publicly, additional work would be needed: HTTPS/TLS, deployment secrets and rotation, restricted monitoring/Redis access, migrations and backups, safer/private object storage, pinned dependencies, durable asynchronous processing, privacy/account-deletion workflows, and appropriate moderation/security controls. These are **future learning topics and operational considerations**, not claims that the current demo supports production traffic.
 
-## 18. Known issues and limitations
+## 19. Known issues and limitations
 
-- **No full-stack execution verification** in the audit environment: Docker CLI/daemon unavailable and uploaded Node modules are Windows-specific.
+- **Not production deployed:** passing GitHub Actions CI and image-publishing workflows does not mean a persistent live host, production operations, browser E2E tests, or independent security audits have been completed.
 - Avatar upload requires manually starting/configuring LocalStack or external S3. `latest` LocalStack requires extra configuration in some versions. Browser-readable development objects are intentionally public in the LocalStack init policy.
 - Service-to-service references are not enforced by foreign keys. Users may like/comment on nonexistent IDs unless validated elsewhere; cross-service deletion cleanup is **best-effort**.
 - Redis comment-deletion pub/sub is not durable; likes listener reconnects after Redis failures, but missed events are not replayed. Gateway asynchronous cleanup can be interrupted.
@@ -454,16 +494,16 @@ The Compose file is a **local development configuration**. Before deploying publ
 - `UserProfilePage.tsx` is an alternate component, **not routed**; public profile flow actually uses `ProfilePage.tsx`.
 - Python dependencies and some Docker image tags are not pinned to exact versions; builds may change over time.
 
-## 19. Prioritized roadmap
+## 20. Prioritized roadmap
 
-1. Verify the actual Docker build, images and all workflow scripts on a clean Linux machine with proper dependencies, and fix newly reproduced integration problems.
-2. Add cross-service existence validation, durable outbox/job handling and cleanup retries/reconciliation; test malformed data and Redis outages.
-3. Add proper DB migrations, backup/restore validation, pinned dependencies/images and signed/private avatar URLs.
-4. Add account deletion, token lifecycle improvements, browser E2E tests and accessibility audits.
-5. For scale, consider operationalized DB engines and distributed tracing only after deployment requirements justify them.
+1. Add a lightweight browser end-to-end smoke test for registration, login, posts and comments, with clear test-data cleanup.
+2. Strengthen regression coverage for unavailable microservices, malformed requests, Redis interruptions and database initialization.
+3. Practice reliable data changes: simple schema migrations, backup/restore procedures and cross-service consistency checks.
+4. Explore refresh tokens, better account deletion, accessibility and safer avatar storage as optional learning exercises.
+5. Only if project requirements grow, explore durable messaging, a managed database, improved observability and a real deployment pipeline.
 
-## 20. Contribution, license and credits
+## 21. Contribution, license and credits
 
-Contributions should include a focused change, updated tests, configuration examples, and documentation; do not commit secrets, actual databases, build artifacts, `node_modules`, or `.env`. This repository contains code and configuration for FastAPI, React, Vite, SQLAlchemy, Docker, Redis, Prometheus, Grafana and LocalStack; consult those projects' licenses before redistribution. **No project `LICENSE` file or verified author attribution was present in the provided archive**; do not assume the code has a particular open-source license.
+For this educational repository, keep changes focused and accompany new features with appropriate tests and documentation. **Never commit `.env`, real credentials, local database files, `node_modules`, or generated build artifacts.** This project uses FastAPI, React, Vite, SQLAlchemy, Docker, Redis, Prometheus, Grafana and LocalStack. Consult their licenses before redistribution. No verified repository-level license has been established from the supplied materials; do not assume one.
 
-See [AUDIT_REPORT.md](AUDIT_REPORT.md) for original defects, repairs, verification commands and remaining risks.
+`AUDIT_REPORT.md` records earlier repair/audit findings and may describe the state of **an older revision**; the latest GitHub Actions run is the more relevant check for current CI status. See [CHANGES_V4.md](CHANGES_V4.md) for the earlier profile/navigation repairs if that file is present in your repository.
