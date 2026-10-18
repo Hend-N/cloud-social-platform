@@ -6,15 +6,13 @@ on:
       - main
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
-
-    env:
-      LOCALSTACK_AUTH_TOKEN: ${{ secrets.LOCALSTACK_AUTH_TOKEN }}
-      GRAFANA_ADMIN_USER: ${{ secrets.GRAFANA_ADMIN_USER }}
-      GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
-      CI_SECRET_KEY: ${{ secrets.CI_SECRET_KEY }}
+    timeout-minutes: 30
 
     steps:
       - name: Checkout repository
@@ -38,49 +36,126 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Python syntax check
+      - name: Check Python syntax
         run: |
           python -m py_compile gateway/main.py
-          python -m py_compile services/auth-service/main.py
-          python -m py_compile services/user-service/main.py
-          python -m py_compile services/post-service/main.py
-          python -m py_compile services/like-service/main.py
-          python -m py_compile services/comment-service/main.py
-          python -m py_compile services/follow-service/main.py
-
-      - name: Create CI env files
-        run: |
-          SECRET_KEY="$CI_SECRET_KEY"
-
-          printf "SECRET_KEY=%s\n" "$SECRET_KEY" > .env
-
-          printf "GRAFANA_ADMIN_USER=%s\n" "$GRAFANA_ADMIN_USER" >> .env
-          printf "GRAFANA_ADMIN_PASSWORD=%s\n" "$GRAFANA_ADMIN_PASSWORD" >> .env
-
-          printf "REDIS_URL=redis://redis:6379/0\n" >> .env
-          printf "RATE_LIMIT_BACKEND=redis\n" >> .env
-          printf "RATE_LIMIT_KEY_PREFIX=gateway:rate_limit\n" >> .env
-
-          printf "AWS_ENDPOINT_URL=http://localstack:4566\n" >> .env
-          printf "AWS_REGION=us-east-1\n" >> .env
-          printf "AWS_ACCESS_KEY_ID=test\n" >> .env
-          printf "AWS_SECRET_ACCESS_KEY=test\n" >> .env
-          printf "S3_BUCKET_NAME=cloud-social-platform-media\n" >> .env
-          printf "PUBLIC_S3_BASE_URL=http://localhost:4566/cloud-social-platform-media\n" >> .env
-
-          printf "LOCALSTACK_AUTH_TOKEN=%s\n" "$LOCALSTACK_AUTH_TOKEN" >> .env
-
-          for service in auth-service user-service post-service like-service comment-service follow-service; do
-            printf "SECRET_KEY=%s\n" "$SECRET_KEY" > "services/$service/.env"
+          for src in services/*/main.py; do
+            python -m py_compile "$src"
           done
 
-          printf "SECRET_KEY=%s\n" "$SECRET_KEY" > gateway/.env
-          printf "REDIS_URL=redis://redis:6379/0\n" >> gateway/.env
-          printf "RATE_LIMIT_BACKEND=redis\n" >> gateway/.env
-          printf "RATE_LIMIT_KEY_PREFIX=gateway:rate_limit\n" >> gateway/.env
+      # CI is isolated: use NEW temporary values on every run.
+      # The .env files are generated on the runner and are not committed.
+      - name: Create CI environment files
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          python - <<'PY'
+          from pathlib import Path
+          import secrets
 
-      - name: Validate Docker Compose file
-        run: docker compose config
+          jwt_secret = secrets.token_urlsafe(48)
+          internal_secret = secrets.token_urlsafe(48)
+          grafana_password = secrets.token_urlsafe(32)
+
+          root = {
+              "SECRET_KEY": jwt_secret,
+              "INTERNAL_SERVICE_SECRET": internal_secret,
+              "GRAFANA_ADMIN_USER": "admin",
+              "GRAFANA_ADMIN_PASSWORD": grafana_password,
+              "REDIS_HOST": "redis",
+              "REDIS_URL": "redis://redis:6379/0",
+              "RATE_LIMIT_BACKEND": "redis",
+              "RATE_LIMIT_KEY_PREFIX": "gateway:rate_limit",
+              "AWS_ENDPOINT_URL": "http://localstack:4566",
+              "AWS_REGION": "us-east-1",
+              "AWS_ACCESS_KEY_ID": "test",
+              "AWS_SECRET_ACCESS_KEY": "test",
+              "S3_BUCKET_NAME": "cloud-social-platform-media",
+              "PUBLIC_S3_BASE_URL": "http://localhost:4566/cloud-social-platform-media",
+              "MAX_REQUEST_BODY_SIZE_BYTES": "3145728",
+              "LOCALSTACK_AUTH_TOKEN": "",
+          }
+
+          def write_env(path, values):
+              Path(path).write_text(
+                  "".join(f"{key}={value}\n" for key, value in values.items()),
+                  encoding="utf-8",
+              )
+
+          write_env(".env", root)
+
+          shared = {
+              "SECRET_KEY": jwt_secret,
+              "INTERNAL_SERVICE_SECRET": internal_secret,
+          }
+          for service in (
+              "auth-service", "user-service", "post-service",
+              "like-service", "comment-service", "follow-service",
+          ):
+              write_env(f"services/{service}/.env", shared)
+
+          write_env("gateway/.env", {
+              **shared,
+              "REDIS_URL": root["REDIS_URL"],
+              "RATE_LIMIT_BACKEND": root["RATE_LIMIT_BACKEND"],
+              "RATE_LIMIT_KEY_PREFIX": root["RATE_LIMIT_KEY_PREFIX"],
+          })
+
+          print("CI environment created; secret values not displayed.")
+          PY
+
+      - name: Validate Docker Compose and service secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import subprocess
+          from pathlib import Path
+
+          expected = dict(
+              line.split("=", 1)
+              for line in Path(".env").read_text().splitlines()
+              if "=" in line
+          )
+          config = json.loads(subprocess.check_output(
+              ["docker", "compose", "config", "--format", "json"],
+              text=True,
+          ))
+          services = config["services"]
+
+          if "db-volume-init" not in services:
+              raise SystemExit(
+                  "docker-compose.yml is missing db-volume-init. "
+                  "Restore the database volume initializer and its "
+                  "service_completed_successfully dependencies."
+              )
+
+          for name in (
+              "auth-service", "user-service", "post-service",
+              "like-service", "follow-service", "comment-service",
+              "gateway",
+          ):
+              environment = services[name].get("environment", {})
+              for key in ("SECRET_KEY", "INTERNAL_SERVICE_SECRET"):
+                  if environment.get(key) != expected[key]:
+                      raise SystemExit(
+                          f"{name} does not receive the expected {key}. "
+                          "Check env_file: .env in docker-compose.yml."
+                      )
+
+          print("Compose configuration, volume initializer, and shared secrets verified.")
+          PY
+
+      - name: Install backend test dependencies
+        run: |
+          for req in services/*/requirements.txt gateway/requirements.txt; do
+            python -m pip install -r "$req"
+          done
+
+      - name: Run regression tests
+        run: python -m unittest discover -s tests -v
 
       - name: Build Docker stack
         run: docker compose build
@@ -89,22 +164,20 @@ jobs:
         run: docker compose up -d
 
       - name: Wait for stack
+        shell: bash
         run: |
+          set -euo pipefail
           echo "Waiting for gateway and frontend..."
-
           for i in {1..40}; do
-            if curl -fsS http://localhost:8080/health >/dev/null && curl -fsSI http://localhost:3000 >/dev/null; then
+            if curl -fsS http://localhost:8080/health >/dev/null && \
+               curl -fsSI http://localhost:3000 >/dev/null; then
               echo "Stack is ready."
               exit 0
             fi
-
-            echo "Still waiting..."
+            echo "Still waiting ($i/40)..."
             sleep 3
           done
-
           echo "Stack did not become ready."
-          docker compose ps
-          docker compose logs --tail=150
           exit 1
 
       - name: Clear Redis rate limits
@@ -115,16 +188,7 @@ jobs:
           chmod +x ./test_all_services.sh
           ./test_all_services.sh
 
-      - name: Show logs on failure
-        if: failure()
-        run: |
-          docker compose ps
-          docker compose logs --tail=200
-
-      - name: Stop Docker stack
-        if: always()
-        run: docker compose down -v
-      - name: Show logs on failure
+      - name: Show Docker logs on failure
         if: failure()
         run: |
           if [ -f .env ]; then
@@ -138,7 +202,5 @@ jobs:
         if: always()
         run: |
           if [ -f .env ]; then
-            docker compose down
-          else
-            echo "Nothing to stop."
+            docker compose down || true
           fi
